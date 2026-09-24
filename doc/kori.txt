@@ -1,0 +1,189 @@
+*kori.txt*  Neovim integration for kori, the terminal coding agent.
+
+==============================================================================
+CONTENTS                                                      *kori-contents*
+
+  1. Introduction ............................... |kori-introduction|
+  2. Requirements ............................... |kori-requirements|
+  3. Setup ...................................... |kori-setup|
+  4. The kori hook .............................. |kori-hook|
+  5. Commands ................................... |kori-commands|
+  6. Mappings ................................... |kori-mappings|
+  7. Configuration .............................. |kori-config|
+  8. How it works ............................... |kori-how|
+  9. API ........................................ |kori-api|
+
+==============================================================================
+1. INTRODUCTION                                         *kori-introduction*
+
+kori.nvim shows you what kori changed in the buffer you are already editing.
+Files reload when kori writes them, edits are marked in place, and you step
+through them with ]r and [r.
+
+The cursor is never moved for you by default: kori tells you it changed
+something and marks where. Setting `follow` to "peek" or "open" makes it more
+forward.
+
+==============================================================================
+2. REQUIREMENTS                                         *kori-requirements*
+
+Neovim 0.10 or newer, and kori 0.76 or newer on $PATH.
+
+The hook shim `kori-nvim` must also be on $PATH; it is `bin/kori-nvim` in the
+plugin. Run |:checkhealth| for kori to see what is missing.
+
+==============================================================================
+3. SETUP                                                     *kori-setup*
+
+With lazy.nvim: >lua
+    { "FacileStudio/kori.nvim", opts = {} }
+<
+
+When the plugin loads it calls `setup()` itself. To configure it yourself, or
+to lazy-load on commands, set this first: >lua
+    vim.g.kori_nvim_no_defaults = true
+<
+
+Then call |kori.setup()| when you want it.
+
+==============================================================================
+4. THE KORI HOOK                                             *kori-hook*
+
+kori has no socket yet, so edits are reported through a hook. Add this to
+`~/.kori.yml`, or to a project's `.kori.yml`: >
+
+    hooks:
+      - name: kori.nvim
+        on: after_tool_call
+        match: [edit_file, write_file]
+        run: kori-nvim emit
+        timeout: 2s
+        async: true
+<
+
+`async: true` keeps the hook off the tool-call path. kori asks before running a
+hook it has not seen in a project before; that prompt is per repository.
+
+The shim appends one JSON line per edit to `$XDG_RUNTIME_DIR/kori-nvim/`, which
+the plugin tails. That directory is 0700 and its files 0600, because the payload
+carries the text of the edited file. The plugin deletes it on startup.
+
+==============================================================================
+5. COMMANDS                                               *kori-commands*
+
+:KoriChanges                                                    *:KoriChanges*
+    List every file kori changed, with hunk and line counts. <CR> opens the
+    file under the cursor at its first changed line. `q` closes the list.
+
+:KoriClear                                                      *:KoriClear*
+    Forget every recorded edit and clear the marks.
+
+:KoriPeek                                                        *:KoriPeek*
+    Show the last edit in the current buffer in a float, without taking focus.
+
+:KoriStart [cmd]                                                *:KoriStart*
+    Open a right-hand vertical split running kori. Optional arguments replace
+    the command, so `:KoriStart kori --model opus` works.
+
+:KoriHealth                                                    *:KoriHealth*
+    Run the health check in the current buffer.
+
+==============================================================================
+6. MAPPINGS                                               *kori-mappings*
+
+]r                                                       *]r* *kori-next-edit*
+    Jump to the next edit kori made in this buffer. Wraps.
+
+[r                                                   *[r* *kori-prev-edit*
+    Jump to the previous edit. Wraps.
+
+<leader>kc                                              *<leader>kc* *kori-changes*
+    |:KoriChanges|
+
+<leader>kp                                                 *<leader>kp* *kori-peek*
+    |:KoriPeek|
+
+No default mapping overwrites one you already have. Check the mapping without
+the plugin with |:checkhealth| kori.
+
+==============================================================================
+7. CONFIGURATION                                           *kori-config*
+
+>lua
+    require("kori").setup({
+      enabled = true,
+      root = nil,
+      spool_dir = nil,
+      follow = "off",
+      keymaps = true,
+      notify = true,
+      reload = { enabled = true, debounce_ms = 120 },
+      marks = { enabled = true, signs = true, virtual_text = true },
+      ui = { panel_height = 10, term_width = 80 },
+    })
+<
+
+`enabled`     Master switch. When false, no watcher starts.
+
+`root`        Project root. Defaults to the cwd.
+
+`spool_dir`   Where the shim writes. Defaults to `$XDG_RUNTIME_DIR/kori-nvim`,
+              falling back to `$TMPDIR/kori-nvim-<uid>`.
+
+`follow`      What happens when an edit lands:
+                "off"   a notification and marks; nothing moves
+                "peek"  a float beside the cursor with the changed lines, no
+                        focus taken, closes after four seconds
+                "open"  open the file and put the cursor on the first changed
+                        line
+
+              "open" is skipped when you are not in normal mode, or when the
+              current buffer has unsaved changes and 'hidden' is off, so it
+              cannot interrupt typing or make you abandon a file.
+
+`keymaps`     Install the mappings above. Never overrides an existing mapping.
+
+`notify`      Report each edit with |vim.notify()|.
+
+`reload`      Reload a file kori wrote, keeping the cursor and view.
+
+`marks`       Signs and virtual text at the changed lines.
+
+==============================================================================
+8. HOW IT WORKS                                               *kori-how*
+
+The changed lines do not come from the hook payload. The payload says which file
+kori touched; the plugin then diffs the buffer against the file on disk, which
+is exact and works for any tool. That is why:
+
+- a buffer with unsaved changes is never clobbered, and carries no marks while
+  it disagrees with disk, since the line numbers would be wrong. A warning
+  names the file; the marks return when you reload it.
+- a file that is not open in a buffer is listed in |:KoriChanges| and receives
+  its marks when you open it.
+
+`run_command` edits are not covered: a shell command does not name the file it
+wrote. kori's diff package parses in-place edit commands, and the plugin will
+use that when the kori-side socket lands.
+
+==============================================================================
+9. API                                                         *kori-api*
+
+kori.setup({opts})                                              *kori.setup()*
+    Configure the plugin and start watching. Called automatically unless
+    `vim.g.kori_nvim_no_defaults` is set.
+
+kori.statusline()                                          *kori.statusline()*
+    A statusline fragment, for example "kori \u{25d1} 3", or "" when kori has
+    changed nothing.
+
+kori.changes()                                                *kori.changes()*
+    |:KoriChanges|
+
+kori.clear()                                                    *kori.clear()*
+    |:KoriClear|
+
+kori.start({cmd})                                              *kori.start()*
+    |:KoriStart|
+
+vim:tw=78:ts=8:noet:ft=help:norl:
