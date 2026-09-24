@@ -111,7 +111,14 @@ local function newer(entry, best)
   return tostring(entry.started or "") > tostring(best.started or "")
 end
 
---- Pick the session whose root matches best, falling back to the newest started.
+--- Pick the session whose root matches best.
+---
+--- A root that matches nothing picks nothing, rather than the newest session
+--- anywhere on the machine. Attaching across projects is not a convenience: a
+--- prompt typed here runs in that session's agent, in that session's root, so
+--- the fallback would run work somewhere the user was not looking. Only a
+--- caller with no root in mind passes nil, and that is the one case where any
+--- session is as good as any other.
 --- @param entries table[] entries returned by M.scan()
 --- @param root string|nil root to match
 --- @return table|nil entry
@@ -124,6 +131,9 @@ function M.pick(entries, root)
     elseif current > best_score or (current == best_score and newer(entry, best)) then
       best, best_score = entry, current
     end
+  end
+  if root and best_score == 0 then
+    return nil
   end
   return best
 end

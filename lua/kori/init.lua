@@ -110,6 +110,21 @@ local function on_spool_event(payload)
   end
 end
 
+--- The line a finished run is announced with, including what it cost when the
+--- session's backend reported a price. A backend that reports none sends zero,
+--- and a run is not "free", it is unpriced, so the figure is left off rather
+--- than printed as $0.0000.
+--- @param ev table the done event
+--- @return string line
+local function done_line(ev)
+  local reason = ev.reason or "end_turn"
+  local cost = tonumber(ev.cost)
+  if not cost or cost <= 0 then
+    return ("run finished (%s)"):format(reason)
+  end
+  return ("run finished (%s) · $%.4f"):format(reason, cost)
+end
+
 --- Give every event the protocol defines a path to the user.
 ---
 --- hello, turn and done are announced, edit is applied and marked, approval is
@@ -164,7 +179,7 @@ local function on_ide_event(ev)
   end
   if kind == "done" then
     fire("KoriDone", ev)
-    tell(("run finished (%s)"):format(ev.reason or "end_turn"))
+    tell(done_line(ev))
     return
   end
   if kind == "error" then

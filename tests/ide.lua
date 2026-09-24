@@ -123,7 +123,8 @@ eq(discover.alive(999999), false, "a dead pid is not alive")
 eq(discover.parse(disc .. "/broken.json"), nil, "a malformed discovery file is ignored")
 eq(discover.find(home, disc).socket, alive_sock, "a matching root beats a newer dead pid")
 eq(discover.find(home .. "/sub", disc).socket, alive_sock, "a root below the session root still matches")
-eq(discover.find("/nowhere/at/all", disc).socket, home .. "/other.sock", "without a root the newest session wins")
+eq(discover.find("/nowhere/at/all", disc), nil, "a root that matches nothing picks nothing")
+eq(discover.find(nil, disc).socket, home .. "/other.sock", "with no root in mind the newest session wins")
 
 local states = {}
 local lonely = ide.setup({

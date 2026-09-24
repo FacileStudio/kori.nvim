@@ -4,7 +4,7 @@ All notable changes to kori.nvim. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-24
 
 ### Added
 
@@ -29,6 +29,18 @@ All notable changes to kori.nvim. The format follows
 
 ### Fixed
 
+- A session in another project is no longer picked up when nothing matches your
+  working directory. Discovery scored a root and then fell back to the newest
+  session anywhere on the machine, so with kori running in another checkout,
+  attaching here would silently attach there — and now that a prompt sent from
+  the editor runs in the session it reached, that meant running work in the
+  wrong project, in the wrong root. A root that matches nothing now picks
+  nothing and reports "no kori session found"; only a caller with no root in
+  mind gets the newest.
+- The run-finished notice carries the cost when the backend reported one.
+  `done`'s `cost` was decoded and thrown away. A backend that reports no price
+  sends zero, which is unpriced rather than free, so the figure is left off
+  rather than printed as `$0.0000`.
 - `turn` and `error` events were dropped outright, so a session that started a
   turn or hit a protocol problem said nothing, and `hello` was stored without
   ever being shown. `tool` disappeared whenever `statusline = false`. An `edit`
