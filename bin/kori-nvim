@@ -1,0 +1,59 @@
+#!/bin/sh
+# kori-nvim — the hook shim kori runs after an editing tool call.
+#
+# kori's hooks hand the event to this script as JSON on stdin:
+#
+#   {"event":"after_tool_call","tool":"edit_file",
+#    "input":"{\"path\":\"...\",\"old\":\"...\",\"new\":\"...\"}",
+#    "result":"edited ...","retry":false}
+#
+# One line per event is appended to a spool file that the Neovim plugin tails.
+# Nothing is parsed here: the plugin needs the whole payload, and a shell
+# parser would be a second implementation of the JSON decoder for no gain.
+#
+# The spool carries the text of files kori edited, so it is created 0700 and
+# every file in it is 0600. It lives in $XDG_RUNTIME_DIR and is wiped by the
+# plugin on startup, so it does not outlive the session.
+#
+# Exit status is always 0. A hook that fails on after_tool_call cannot undo the
+# call, and a non-zero exit would report a broken hook for a disk-full or a
+# read-only runtime directory, which is not the user's problem to fix here.
+
+set -u
+
+umask 077
+
+spool_dir="${KORI_NVIM_SPOOL_DIR:-}"
+if [ -z "$spool_dir" ]; then
+  if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+    spool_dir="$XDG_RUNTIME_DIR/kori-nvim"
+  else
+    spool_dir="${TMPDIR:-/tmp}/kori-nvim-$(id -u)"
+  fi
+fi
+
+command="${1:-emit}"
+
+case "$command" in
+  emit)
+    mkdir -p "$spool_dir" 2>/dev/null || exit 0
+    chmod 700 "$spool_dir" 2>/dev/null || true
+    key=$(pwd | cksum | cut -d' ' -f1)
+    file="$spool_dir/$key.ndjson"
+    # The payload has no newline of its own; the reader only consumes complete
+    # lines, so a reader that catches the file between these two writes waits
+    # for the terminator rather than decoding half an event.
+    cat >>"$file" 2>/dev/null || exit 0
+    printf '\n' >>"$file" 2>/dev/null || true
+    chmod 600 "$file" 2>/dev/null || true
+    ;;
+  dir)
+    printf '%s\n' "$spool_dir"
+    ;;
+  *)
+    printf 'kori-nvim: unknown command %s\n' "$command" >&2
+    exit 2
+    ;;
+esac
+
+exit 0
