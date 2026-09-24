@@ -1,0 +1,4 @@
+/.claude/
+/lazy.nvim/
+/doc/tags
+*.tar.gz
