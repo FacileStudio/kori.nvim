@@ -30,17 +30,19 @@ ln -s "$PWD/bin/kori-nvim" ~/.local/bin/kori-nvim
 
 ## The kori hook
 
-kori has no socket yet, so the plugin learns about edits the way kori already lets anything learn about them: a hook. Add this to `~/.kori.yml`, or to a project's `.kori.yml`:
+No kori release offers a socket yet, so the plugin learns about edits the way kori already lets anything learn about them: a hook. Add this to `~/.kori.yml`, or to a project's `.kori.yml`:
 
 ```yaml
 hooks:
   - name: kori.nvim
     on: after_tool_call
-    match: [edit_file, write_file]
+    match: [edit_file, write_file, run_command]
     run: kori-nvim emit
     timeout: 2s
     async: true
 ```
+
+`run_command` is in the list because a shell command can edit a file in place, and the plugin ports kori's own parser for those commands. Leave it out and only `edit_file` and `write_file` are reported.
 
 The block is verified against kori's own config loader. `async: true` keeps it off the tool-call path. kori asks before running a hook it has not seen in a project before; that prompt is per repo.
 
@@ -57,9 +59,16 @@ Check it with `:checkhealth kori` if nothing happens.
 | `<leader>ko` | `:KoriToggle` | toggle the chat pane: a right-hand split running kori |
 | `<leader>kc` | `:KoriChanges` | every file and hunk kori changed, `⏎` opens at the first hunk |
 | `<leader>kp` | `:KoriPeek` | float showing the last edit with context, without taking focus |
+| `<leader>kr` | `:KoriRevert` | revert the kori edit under the cursor |
+| | `:KoriRevertAll` | revert every kori edit in this file |
 | | `:KoriStart [cmd]` | open the pane, optionally running something other than kori |
 | | `:KoriClear` | forget every recorded edit |
+| | `:KoriStatus` | report the pane, the session and the root |
 | | `:KoriHealth` | health check |
+| `<leader>ks` | `:KoriSend [text]` | send the selection and context to the session |
+| | `:KoriAsk [text]` | send the whole buffer and context to the session |
+
+`:KoriSend` and `:KoriAsk` need an attached kori session over the IDE socket, which no kori release ships yet. They warn instead of silently doing nothing. Reverting does not: it works on the payload kori's hook already delivers.
 
 The pane opens to the right in its own buffer, so it never takes over the file you are editing, and it works from the dashboard. Toggling it off hides the window but leaves kori running, so toggling back returns to the same session. After kori exits, `:KoriStart` starts a fresh one.
 
@@ -91,7 +100,7 @@ require("kori").setup({
 
 - `"off"` (default): a notification and marks. Nothing moves.
 - `"peek"`: a float opens beside your cursor with the changed lines, does not take focus, closes after four seconds.
-- `"open"`: the file opens and the cursor lands on the first changed line. Skipped when you are not in normal mode or the current buffer has unsaved changes, so it can never interrupt typing or prompt you to abandon a file.
+- `"open"`: the cursor lands on the first changed line. A file already on screen is reached by moving the cursor there; anything else opens in its own tab, never as a split, so your layout is left alone. Skipped when you are not in normal mode, or when the file kori edited has unsaved changes in a buffer, so it can never interrupt typing.
 
 Set `vim.g.kori_nvim_no_defaults = true` before the plugin loads to skip the automatic `setup()` and configure it yourself.
 
@@ -115,7 +124,7 @@ Two consequences worth knowing:
 - A buffer with unsaved changes is never clobbered, and gets no marks while it disagrees with disk, because line numbers would be wrong. You get a warning naming the file instead; the marks come back when you reload it.
 - A file that is not open in a buffer is recorded in `:KoriChanges` and gets its marks when you open it. A file kori edits twice while closed is diffed from the first edit's content.
 
-`run_command` edits are not covered yet: `match` above limits the hook to `edit_file` and `write_file` because a shell command does not name the file it wrote. kori's own diff package parses in-place edit commands (`sed -i` and friends) and the plugin will use that when the socket lands.
+`run_command` edits are covered too, as far as they can be: a shell command does not name the file it wrote, so the plugin parses the in-place edit commands kori itself understands (`sed -i`, `awk -i`, `perl -i`) and takes the path from there. Anything with real shell syntax — a pipe, a redirect, a glob, a variable — is refused rather than guessed at, so a command like `sed -i ... f.go 2>/dev/null` is reported as nothing rather than as the wrong file.
 
 ## Roadmap
 
@@ -123,7 +132,7 @@ The design, the survey of how other editors' agent plugins solved the same probl
 
 https://mycelium.facile.studio/artifacts/2026-09-24-kori-nvim-a-neovim-extension-for-kori-plan-d88b22
 
-Next: a real socket in kori (`~/.kori/ide/<pid>.json` plus a unix socket) so the plugin can also send a prompt built from your selection, relay approvals, and drop the hook shim entirely.
+Next: the IDE socket in kori (`~/.kori/ide/<pid>.json` plus a unix socket, spoken by `docs/ide-protocol.md` in the kori repo) so the plugin can also send a prompt built from your selection, relay approvals, and drop the hook shim entirely. The client for it already exists in `lua/kori/ide/` and is tested against a fake session, but no kori release serves the socket yet, so the hook remains the working path. That integration is the next real milestone: two halves that agree on paper and have never met.
 
 ## Tests
 
@@ -131,7 +140,16 @@ Next: a real socket in kori (`~/.kori/ide/<pid>.json` plus a unix socket) so the
 make test
 ```
 
-`tests/run.lua` covers the diff-to-line-ranges logic, the reload and stale-buffer guards, and the shim end to end. `tests/live.lua` checks that the watcher fires when the shim writes while the plugin is running.
+Runs every file in `tests/`, 304 checks in total:
+
+- `run.lua` — the diff-to-line-ranges logic, the reload and stale-buffer guards, and the shim end to end
+- `follow.lua` — every `follow = "open"` outcome, and that none of them splits the view
+- `cmdedit.lua` — the port of kori's in-place command parser, including what it refuses
+- `revert.lua` — `:KoriRevert` and its safety floor
+- `notify.lua` — the per-file notification coalescing
+- `ide.lua` — the socket client against a fake session on a `vim.uv` pipe
+- `pane.lua` — the chat pane never takes over the buffer you are editing
+- `live.lua` — the watcher fires when the shim writes while the plugin is running
 
 ## License
 

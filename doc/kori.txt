@@ -49,17 +49,21 @@ Then call |kori.setup()| when you want it.
 ==============================================================================
 4. THE KORI HOOK                                             *kori-hook*
 
-kori has no socket yet, so edits are reported through a hook. Add this to
-`~/.kori.yml`, or to a project's `.kori.yml`: >
+No kori release offers a socket yet, so edits are reported through a hook. Add
+this to `~/.kori.yml`, or to a project's `.kori.yml`: >
 
     hooks:
       - name: kori.nvim
         on: after_tool_call
-        match: [edit_file, write_file]
+        match: [edit_file, write_file, run_command]
         run: kori-nvim emit
         timeout: 2s
         async: true
 <
+
+`run_command` is listed because a shell command can edit a file in place, and
+the plugin ports kori's own parser for those commands. Leave it out and only
+`edit_file` and `write_file` are reported.
 
 `async: true` keeps the hook off the tool-call path. kori asks before running a
 hook it has not seen in a project before; that prompt is per repository.
@@ -95,6 +99,29 @@ carries the text of the edited file. The plugin deletes it on startup.
     command, so `:KoriStart kori --model opus` works. When the pane is open and
     its process has exited, this starts a fresh one.
 
+:KoriRevert                                                  *:KoriRevert*
+    Revert the kori edit under the cursor, splicing the old text back in. It
+    refuses, with a reason, when the edit carried no old text to restore, when
+    the buffer has unsaved changes, when the file no longer holds the new text,
+    or when that text occurs more than once and the position would be a guess.
+
+:KoriRevertAll                                            *:KoriRevertAll*
+    Revert every kori edit in the current file in one go, and report how many
+    hunks were restored.
+
+:KoriSend [text]                                              *:KoriSend*
+    Send the current selection, with the file, line and branch as context, to
+    the attached kori session. With no argument, a prompt is asked for. Needs
+    an attached session over kori's IDE socket, which no kori release ships
+    yet; without one this warns rather than doing nothing.
+
+:KoriAsk [text]                                                *:KoriAsk*
+    Like |:KoriSend|, but sends the whole buffer instead of the selection.
+
+:KoriStatus                                                  *:KoriStatus*
+    Report whether the pane is open, whether a session is attached, and the
+    root in use.
+
 :KoriHealth                                                    *:KoriHealth*
     Run the health check in the current buffer.
 
@@ -115,6 +142,12 @@ carries the text of the edited file. The plugin deletes it on startup.
 
 <leader>kp                                                 *<leader>kp* *kori-peek*
     |:KoriPeek|
+
+<leader>kr                                               *<leader>kr* *kori-revert*
+    |:KoriRevert|
+
+<leader>ks                                                 *<leader>ks* *kori-send*
+    |:KoriSend|
 
 No default mapping overwrites one you already have. Check the mapping without
 the plugin with |:checkhealth| kori.
@@ -147,12 +180,14 @@ the plugin with |:checkhealth| kori.
                 "off"   a notification and marks; nothing moves
                 "peek"  a float beside the cursor with the changed lines, no
                         focus taken, closes after four seconds
-                "open"  open the file and put the cursor on the first changed
-                        line
+                "open"  put the cursor on the first changed line. A file
+                        already on screen is reached by moving the cursor
+                        there; any other file opens in its own tab, never as a
+                        split
 
               "open" is skipped when you are not in normal mode, or when the
-              current buffer has unsaved changes and 'hidden' is off, so it
-              cannot interrupt typing or make you abandon a file.
+              file kori edited has unsaved changes in a buffer, so it cannot
+              interrupt typing or show you a stale buffer.
 
 `keymaps`     Install the mappings above. Never overrides an existing mapping.
 
@@ -175,9 +210,12 @@ is exact and works for any tool. That is why:
 - a file that is not open in a buffer is listed in |:KoriChanges| and receives
   its marks when you open it.
 
-`run_command` edits are not covered: a shell command does not name the file it
-wrote. kori's diff package parses in-place edit commands, and the plugin will
-use that when the kori-side socket lands.
+`run_command` edits are covered as far as they can be. A shell command does not
+name the file it wrote, so the plugin parses the in-place edit commands kori
+itself understands (`sed -i`, `awk -i`, `perl -i`) and takes the path from
+there. A command carrying real shell syntax, such as a pipe, a redirect, a glob
+or a variable, is refused rather than guessed at: `sed -i s/x/y/ f.go
+2>/dev/null` reports nothing, never the wrong file.
 
 ==============================================================================
 9. API                                                         *kori-api*
@@ -196,6 +234,17 @@ kori.changes()                                                *kori.changes()*
 kori.clear()                                                    *kori.clear()*
     |:KoriClear|
 
+kori.send({text}, {whole})                                      *kori.send()*
+    Send a prompt with the current editor context attached. A nil `text` asks
+    for one interactively; `whole` true sends the whole buffer rather than the
+    selection. Needs an attached session.
+
+kori.revert()                                                  *kori.revert()*
+    |:KoriRevert|. Returns whether it reverted, plus a reason when it did not.
+
+kori.connected()                                            *kori.connected()*
+    Whether a kori session is attached over the IDE socket.
+
 kori.start({cmd})                                              *kori.start()*
     Open the chat pane. With no argument, runs kori. Reuses a live pane, and
     replaces one whose process has exited. Returns false on failure.
@@ -206,6 +255,9 @@ kori.toggle({cmd})                                            *kori.toggle()*
 
 kori.is_open()                                              *kori.is_open()*
     Whether the pane is on screen.
+
+kori.pane()                                                    *kori.pane()*
+    The window holding the pane, or nil.
 
 kori.hide()                                                    *kori.hide()*
     Close the pane window, leaving kori running.
