@@ -184,7 +184,6 @@ function M.start(cmd)
   local win = vim.api.nvim_get_current_win()
   local buf = vim.api.nvim_win_get_buf(win)
   vim.api.nvim_set_option_value("filetype", "kori", { buf = buf })
-  vim.api.nvim_buf_set_name(buf, ("kori://%d"):format(buf))
   vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
 
   local ok, err = pcall(vim.fn.termopen, argv, {

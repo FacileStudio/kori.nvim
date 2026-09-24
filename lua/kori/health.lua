@@ -34,7 +34,7 @@ function M.check()
   local dir = spool.dir(config.get())
   if vim.fn.isdirectory(dir) == 1 then
     local perm = vim.fn.getfperm(dir)
-    if perm:sub(2, 4) == "------" then
+    if perm:sub(4) == "------" then
       vim.health.ok("spool directory " .. dir .. " (" .. perm .. ")")
     else
       vim.health.warn("spool directory " .. dir .. " is " .. perm, {

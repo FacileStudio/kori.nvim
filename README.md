@@ -54,9 +54,9 @@ Check it with `:checkhealth kori` if nothing happens.
 |---|---|---|
 | `]r` | | next edit kori made in this buffer |
 | `[r` | | previous edit |
+| `<leader>ko` | `:KoriStart [cmd]` | open the chat pane, a right-hand split running kori |
 | `<leader>kc` | `:KoriChanges` | every file and hunk kori changed, `⏎` opens at the first hunk |
 | `<leader>kp` | `:KoriPeek` | float showing the last edit with context, without taking focus |
-| | `:KoriStart [cmd]` | open kori in a right-hand split |
 | | `:KoriClear` | forget every recorded edit |
 | | `:KoriHealth` | health check |
 
