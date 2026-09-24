@@ -71,12 +71,30 @@ Check it with `:checkhealth kori` if nothing happens. It reports a missing `befo
 | | `:KoriRevertAll` | revert every kori edit in this file |
 | | `:KoriStart [cmd]` | open the pane, optionally running something other than kori |
 | | `:KoriClear` | forget every recorded edit |
-| | `:KoriStatus` | report the pane, the session and the root |
+| | `:KoriStatus` | report the pane, the session, the root, and the last turn and tool |
 | | `:KoriHealth` | health check |
 | `<leader>ks` | `:KoriSend [text]` | send the selection and context to the session |
 | | `:KoriAsk [text]` | send the whole buffer and context to the session |
+| | `:KoriOpen` | ask the session to scroll its own view to this line |
+| | `:KoriCancel` | cancel the run in progress |
+| | `:KoriAttach` | attach to a session over the IDE socket, or resume looking |
+| | `:KoriDetach` | stop reconnecting and drop the IDE socket, leaving the pane alone |
 
-`:KoriSend` and `:KoriAsk` need an attached kori session over the IDE socket, which no kori release ships yet. They warn instead of silently doing nothing. Reverting does not: it works on the payload kori's hook already delivers.
+`:KoriSend`, `:KoriAsk`, `:KoriOpen`, `:KoriCancel`, `:KoriAttach` and `:KoriDetach` need kori's IDE socket, which no kori release ships yet: a session serves it only when kori runs with `--ide` or `$KORI_IDE` is set. Each warns instead of silently doing nothing. Reverting, marking and the changes panel do not: they work on the payload kori's hook already delivers.
+
+When a session is attached, its events reach you without any configuration:
+
+| Event | What you see |
+|---|---|
+| `hello` | a notification naming kori's version and model; the session is remembered for `:KoriStatus` |
+| `turn` | a notification that the turn started; the number shows in `:KoriStatus` |
+| `tool` | `User KoriTool`; the last tool and its status show in `:KoriStatus` |
+| `edit` | the file reloads and is marked, followed when `follow` says so, as a hook edit is |
+| `approval` | the tool input, verbatim, in a split, with a Yes/No dialog. Only Yes approves |
+| `done` | a notification naming why the run ended |
+| `error` | a notification at error level; the session closes the connection after it |
+
+The same events fire `User KoriHello`, `KoriTurn`, `KoriTool`, `KoriEdit`, `KoriDone` and `KoriStatus` autocmds, so a statusline can drive itself from them. `edit` goes through the same path a hook edit does, so `follow`, `]r` / `[r`, `:KoriChanges` and `:KoriPeek` all apply.
 
 The pane opens to the right in its own buffer, so it never takes over the file you are editing, and it works from the dashboard. A followed edit opens beside it rather than over it, so the chat stays on screen while kori works. Toggling it off hides the window but leaves kori running, so toggling back returns to the same session. After kori exits, `:KoriStart` starts a fresh one.
 
@@ -97,12 +115,16 @@ require("kori").setup({
   spool_dir = nil,     -- where the shim writes; defaults to $XDG_RUNTIME_DIR/kori-nvim
   follow = "off",      -- "off" | "peek" | "open"
   keymaps = true,      -- never overrides a mapping you already have
-  notify = true,
+  notify = true,       -- progress notifications; warnings and errors are never silenced
   reload = { enabled = true, debounce_ms = 120 },
   marks = { enabled = true, signs = true, virtual_text = true },
+  notifications = { enabled = true, window_ms = 250 },
+  ide = { enabled = true, dir = nil, retry_min_ms = 500, retry_max_ms = 10000 },
   ui = { panel_height = 10, term_width = 80 },
 })
 ```
+
+`ide` controls the client for kori's IDE socket: `dir` overrides the `~/.kori/ide` directory the session files are read from, and the two retry bounds are the backoff floor and ceiling in milliseconds. It reconnects on its own whenever the session goes away, re-running discovery each time, so a kori started after Neovim is still found.
 
 `follow` decides what happens when an edit lands:
 
@@ -144,7 +166,7 @@ The design, the survey of how other editors' agent plugins solved the same probl
 
 https://mycelium.facile.studio/artifacts/2026-09-24-kori-nvim-a-neovim-extension-for-kori-plan-d88b22
 
-Next: the IDE socket in kori (`~/.kori/ide/<pid>.json` plus a unix socket, spoken by `docs/ide-protocol.md` in the kori repo) so the plugin can also send a prompt built from your selection, relay approvals, and drop the hook shim entirely. The client for it already exists in `lua/kori/ide/` and is tested against a fake session, but no kori release serves the socket yet, so the hook remains the working path. That integration is the next real milestone: two halves that agree on paper and have never met.
+Next: the IDE socket in kori (`~/.kori/ide/<pid>.json` plus a unix socket, spoken by `docs/ide-protocol.md` in the kori repo) so the plugin can also send a prompt built from your selection, relay approvals, and drop the hook shim entirely. The client for it already exists in `lua/kori/ide/`, and `tests/ide.lua` drives it end to end from a fake session that speaks the protocol, up to and including the plugin's own event path and approvals. No kori release serves the socket yet, so the hook remains the working path. The remaining milestone is the two real halves meeting, not more client work.
 
 ## Tests
 
@@ -152,14 +174,14 @@ Next: the IDE socket in kori (`~/.kori/ide/<pid>.json` plus a unix socket, spoke
 make test
 ```
 
-Runs every file in `tests/`, 354 checks in total:
+Runs every file in `tests/`, 442 checks in total:
 
 - `run.lua` — the diff-to-line-ranges logic, the reload and stale-buffer guards, the before-hook handshake, and the shim end to end
 - `follow.lua` — every `follow = "open"` outcome: beside the pane, in its own tab, and the refusals
 - `cmdedit.lua` — the port of kori's in-place command parser, including what it refuses
 - `revert.lua` — `:KoriRevert` and its safety floor
 - `notify.lua` — the per-file notification coalescing
-- `ide.lua` — the socket client against a fake session on a `vim.uv` pipe
+- `ide.lua` — the socket client against a fake session on a `vim.uv` pipe: discovery, framing, the handshake, one of every event, the version refusal, the reconnect, and then the plugin itself driven by that fake session, including a verbatim approval surface and its fail-closed rules
 - `pane.lua` — the chat pane never takes over the buffer you are editing
 - `live.lua` — the watcher fires when the shim writes while the plugin is running
 

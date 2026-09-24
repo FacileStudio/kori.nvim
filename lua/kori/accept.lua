@@ -51,13 +51,13 @@ function M.edit(result)
   return true
 end
 
---- Report that kori started or finished a non-editing tool.
+--- Report that a tool call started or finished, so a statusline can show it.
+--- Fired for every tool event, whatever `statusline` says: the option decides
+--- whether kori contributes a statusline fragment, not whether the session's
+--- progress reaches you.
 --- @param ev table tool event with name and status
 --- @return nil
 function M.tool(ev)
-  if not config.get().statusline then
-    return
-  end
   vim.api.nvim_exec_autocmds("User", { pattern = "KoriTool", data = ev })
 end
 

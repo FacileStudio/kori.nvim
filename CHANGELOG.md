@@ -8,6 +8,10 @@ All notable changes to kori.nvim. The format follows
 
 ### Added
 
+- `:KoriOpen`, `:KoriCancel`, `:KoriAttach` and `:KoriDetach`, and `:KoriStatus`
+  now reports the turn and the last tool. `send` and `stop` had a client method
+  and no way to reach it, and the socket could not be attached or dropped from
+  the editor at all.
 - The `before_tool_call` hook, so `write_file` and `run_command` get line ranges
   and marks on a file you never opened. Those payloads carry no old text, so the
   plugin takes a copy of the file while it still holds the pre-image, and
@@ -25,6 +29,16 @@ All notable changes to kori.nvim. The format follows
 
 ### Fixed
 
+- `turn` and `error` events were dropped outright, so a session that started a
+  turn or hit a protocol problem said nothing, and `hello` was stored without
+  ever being shown. `tool` disappeared whenever `statusline = false`. An `edit`
+  whose file could not be read was swallowed instead of reported.
+- The approval dialog showed the tool's input indented and through the command
+  line, where a long `run_command` is cut off at the screen edge with no
+  warning — the two things the protocol's approval rules forbid. It now shows the
+  input verbatim in a scratch buffer, and every path out of the dialog sends an
+  answer: a closed dialog, an escape, an interrupt or an error is a refusal, and
+  a reply that failed to send is reported rather than swallowed.
 - `follow = "open"` no longer does nothing while you are typing in the chat pane.
   A terminal in insert mode is a mode like any other, and the old guard refused
   every follow there, which meant a follow never happened from the dashboard: the

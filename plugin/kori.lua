@@ -68,15 +68,34 @@ vim.api.nvim_create_user_command("KoriAsk", function(args)
   kori.send(args.args ~= "" and args.args or nil, true)
 end, { nargs = "?", desc = "kori: send this buffer and context to the session" })
 
+vim.api.nvim_create_user_command("KoriOpen", function()
+  kori.open()
+end, { desc = "kori: ask the session to scroll its view to this line" })
+
+vim.api.nvim_create_user_command("KoriCancel", function()
+  kori.cancel()
+end, { desc = "kori: cancel the run in progress" })
+
+vim.api.nvim_create_user_command("KoriAttach", function()
+  kori.attach()
+end, { desc = "kori: attach to a kori session over the IDE socket" })
+
+vim.api.nvim_create_user_command("KoriDetach", function()
+  kori.detach()
+end, { desc = "kori: stop reconnecting and drop the IDE socket" })
+
 vim.api.nvim_create_user_command("KoriStatus", function()
   local state = kori._runtime()
   local session = state.session
-  print(("kori.nvim: pane=%s session=%s root=%s"):format(
+  local tool = state.tool and ("%s/%s"):format(state.tool.name or "?", state.tool.status or "?") or "-"
+  print(("kori.nvim: pane=%s session=%s root=%s turn=%s tool=%s"):format(
     kori.is_open() and "open" or "closed",
     kori.connected() and "attached" or "detached",
-    session and (session.root or "") or "none"
+    session and (session.root or "") or "none",
+    state.turn and tostring(state.turn) or "-",
+    tool
   ))
-end, { desc = "kori: report the pane and session state" })
+end, { desc = "kori: report the pane, the session and the root" })
 
 vim.api.nvim_create_user_command("KoriClear", function()
   kori.clear()

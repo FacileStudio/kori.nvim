@@ -131,15 +131,34 @@ how the `before` shim knows whether anyone is there to answer it.
 :KoriSend [text]                                              *:KoriSend*
     Send the current selection, with the file, line and branch as context, to
     the attached kori session. With no argument, a prompt is asked for. Needs
-    an attached session over kori's IDE socket, which no kori release ships
-    yet; without one this warns rather than doing nothing.
+    an attached session over kori's IDE socket, which a session serves only
+    when kori runs with --ide or $KORI_IDE is set; without one this warns
+    rather than doing nothing.
 
 :KoriAsk [text]                                                *:KoriAsk*
     Like |:KoriSend|, but sends the whole buffer instead of the selection.
 
+:KoriOpen                                                      *:KoriOpen*
+    Ask the attached session to scroll its own view to the line the cursor is
+    on in this file. Needs an attached session, as |:KoriSend| does.
+
+:KoriCancel                                                  *:KoriCancel*
+    Cancel the run in progress in the attached session, as Ctrl-C does in the
+    pane. Needs an attached session.
+
+:KoriAttach                                                  *:KoriAttach*
+    Attach to a kori session over the IDE socket, or resume looking after
+    |:KoriDetach|. The plugin looks for a session on its own when it loads, so
+    this is only needed after a detach or when the socket is off.
+
+:KoriDetach                                                  *:KoriDetach*
+    Stop reconnecting and drop the IDE socket. The chat pane and the kori
+    process in it keep running; only the event stream stops. |:KoriAttach|
+    resumes it.
+
 :KoriStatus                                                  *:KoriStatus*
-    Report whether the pane is open, whether a session is attached, and the
-    root in use.
+    Report whether the pane is open, whether a session is attached, the root
+    in use, and the last turn and tool the session reported.
 
 :KoriHealth                                                    *:KoriHealth*
     Run the health check in the current buffer.
@@ -184,6 +203,8 @@ the plugin with |:checkhealth| kori.
       notify = true,
       reload = { enabled = true, debounce_ms = 120 },
       marks = { enabled = true, signs = true, virtual_text = true },
+      notifications = { enabled = true, window_ms = 250 },
+      ide = { enabled = true, dir = nil, retry_min_ms = 500, retry_max_ms = 10000 },
       ui = { panel_height = 10, term_width = 80 },
     })
 <
@@ -215,11 +236,21 @@ the plugin with |:checkhealth| kori.
 
 `keymaps`     Install the mappings above. Never overrides an existing mapping.
 
-`notify`      Report each edit with |vim.notify()|.
+`notify`      Report kori's progress with |vim.notify()|: attaching, each turn,
+              the end of a run, and each edit. Warnings and errors are reported
+              whatever it says, since a failure must not be silenceable.
 
 `reload`      Reload a file kori wrote, keeping the cursor and view.
 
 `marks`       Signs and virtual text at the changed lines.
+
+`notifications`
+              Coalesce the edit notifications per file over `window_ms`.
+
+`ide`         The client for kori's IDE socket. `dir` overrides the ~/.kori/ide
+              directory the per session files are read from; `retry_min_ms` and
+              `retry_max_ms` bound the reconnect backoff. Discovery re-runs on
+              every reconnect, so a kori started after Neovim is still found.
 
 ==============================================================================
 8. HOW IT WORKS                                               *kori-how*
@@ -253,6 +284,23 @@ or a variable, is refused rather than guessed at: `sed -i s/x/y/ f.go
 same way, which in practice is how kori often writes one, so a command like
 `sed -i s/x/y/ f.go && cat f.go` is reported as nothing.
 
+When a session is attached over the IDE socket, its events reach you with no
+configuration: >
+
+    hello      a notification naming kori's version and model
+    turn       a notification that the turn started
+    tool       the |User| KoriTool event, and the last tool in |:KoriStatus|
+    edit       the same reload, marks and follow a hook edit gets
+    approval   the tool input verbatim, in a split, with a Yes/No dialog
+    done       a notification naming why the run ended
+    error      a notification at error level
+<
+The same events fire `User KoriHello`, `KoriTurn`, `KoriTool`, `KoriEdit` and
+`KoriDone`, so a statusline or a plugin can drive itself from them. An approval
+fails closed: only an explicit Yes approves, and a dismissed dialog, an escape,
+an interrupt or an error is a refusal. The session's own timeout is what
+decides when no answer arrives, and it denies.
+
 ==============================================================================
 9. API                                                         *kori-api*
 
@@ -274,6 +322,18 @@ kori.send({text}, {whole})                                      *kori.send()*
     Send a prompt with the current editor context attached. A nil `text` asks
     for one interactively; `whole` true sends the whole buffer rather than the
     selection. Needs an attached session.
+
+kori.open()                                                    *kori.open()*
+    |:KoriOpen|. Ask the attached session to scroll its view to this line.
+
+kori.cancel()                                                *kori.cancel()*
+    |:KoriCancel|. Cancel the run in progress.
+
+kori.attach()                                                *kori.attach()*
+    |:KoriAttach|. Returns whether the plugin is looking for a session.
+
+kori.detach()                                                *kori.detach()*
+    |:KoriDetach|. Returns whether there was an attachment to drop.
 
 kori.revert()                                                  *kori.revert()*
     |:KoriRevert|. Returns whether it reverted, plus a reason when it did not.

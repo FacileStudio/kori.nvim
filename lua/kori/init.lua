@@ -14,10 +14,22 @@ local revert = require("kori.revert")
 local spool = require("kori.spool")
 local ui = require("kori.ui")
 
-local runtime = { spool = nil, client = nil, session = nil, autocmds = {} }
+local runtime = { spool = nil, client = nil, session = nil, turn = nil, tool = nil, autocmds = {} }
 
 local function warn(msg)
   vim.notify("kori.nvim: " .. msg, vim.log.levels.WARN)
+end
+
+local function tell(msg)
+  local cfg = config.get()
+  if not (cfg.notify and cfg.notifications.enabled) then
+    return
+  end
+  vim.notify("kori.nvim: " .. msg, vim.log.levels.INFO)
+end
+
+local function fire(pattern, data)
+  vim.api.nvim_exec_autocmds("User", { pattern = pattern, data = data })
 end
 
 local function peek_here()
@@ -65,6 +77,30 @@ local function send(prompt, whole)
   runtime.client:send_prompt(context.payload(text, whole))
 end
 
+local function no_session()
+  warn("no kori session is attached, start one with :KoriToggle")
+  return false
+end
+
+local function open_here()
+  if not attached() then
+    return no_session()
+  end
+  local path = context.path()
+  if path == "" then
+    warn("this buffer has no file to show in kori")
+    return false
+  end
+  return runtime.client:send_open({ path = path, line = vim.fn.line(".") })
+end
+
+local function cancel()
+  if not attached() then
+    return no_session()
+  end
+  return runtime.client:send_stop()
+end
+
 local function on_spool_event(payload)
   local result = edit.on_event(payload)
   if result then
@@ -74,32 +110,68 @@ local function on_spool_event(payload)
   end
 end
 
+--- Give every event the protocol defines a path to the user.
+---
+--- hello, turn and done are announced, edit is applied and marked, approval is
+--- put in front of the user as a real dialog, error is reported loudly, and
+--- tool updates the runtime and fires `User KoriTool`, which is what a
+--- statusline plugin listens to. Nothing is dropped: an event type the
+--- protocol adds later is ignored by kori.ide before it ever reaches here.
+--- @param ev table one decoded session event
+--- @return nil
 local function on_ide_event(ev)
   local kind = ev.t
   if kind == "hello" then
     runtime.session = ev
+    local version = ev.version and (" " .. ev.version) or ""
+    local model = ev.model and (" (" .. ev.model .. ")") or ""
+    fire("KoriHello", ev)
+    tell("attached to kori" .. version .. model)
+    return
+  end
+  if kind == "turn" then
+    runtime.turn = ev.n
+    fire("KoriTurn", ev)
+    tell(("turn %s started"):format(tostring(ev.n or "?")))
     return
   end
   if kind == "edit" then
-    accept.edit(edit.apply_remote(ev.path, {
-      { first = ev.first, last = ev.last, added = ev.added, removed = ev.removed },
-    }, { tool = ev.tool }))
+    local ranges
+    if type(ev.first) == "number" and type(ev.last) == "number" then
+      ranges = { { first = ev.first, last = ev.last, added = ev.added, removed = ev.removed } }
+    end
+    local result = edit.apply_remote(ev.path, ranges, { tool = ev.tool })
+    if not result then
+      warn(("kori changed %s, which could not be read"):format(tostring(ev.path)))
+      return
+    end
+    accept.edit(result)
     return
   end
   if kind == "tool" then
+    runtime.tool = ev
     accept.tool(ev)
     return
   end
   if kind == "approval" then
     approval.handle(ev, function(id, allow)
-      if runtime.client then
-        runtime.client:send_approval({ id = id, allow = allow })
+      if not runtime.client then
+        return false
       end
+      return runtime.client:send_approval({ id = id, allow = allow })
     end)
     return
   end
   if kind == "done" then
-    vim.notify(("kori finished (%s)"):format(ev.reason or "end_turn"), vim.log.levels.INFO)
+    fire("KoriDone", ev)
+    tell(("run finished (%s)"):format(ev.reason or "end_turn"))
+    return
+  end
+  if kind == "error" then
+    vim.notify(
+      ("kori.nvim: the session reported an error: %s"):format(ev.reason or "unknown"),
+      vim.log.levels.ERROR
+    )
   end
 end
 
@@ -162,6 +234,39 @@ local function attach_ide(cfg)
   runtime.client:start()
 end
 
+--- Attach to a session, or resume looking for one after a detach.
+--- @return boolean started
+local function attach()
+  local cfg = config.get()
+  if not cfg.ide.enabled then
+    warn("the IDE socket is off: ide.enabled is false")
+    return false
+  end
+  if attached() then
+    tell("already attached to a session")
+    return true
+  end
+  if runtime.client then
+    runtime.client:start()
+  else
+    attach_ide(cfg)
+  end
+  tell("looking for a kori session")
+  return true
+end
+
+--- Stop reconnecting and drop the socket, leaving the pane and kori alone.
+--- @return boolean detached
+local function detach()
+  if not runtime.client then
+    warn("no kori session is attached")
+    return false
+  end
+  runtime.client:stop()
+  tell("detached; kori keeps running")
+  return true
+end
+
 --- Configure the plugin and start watching for kori's edits.
 --- @param opts table|nil options, merged over the defaults
 --- @return table the effective configuration
@@ -172,6 +277,7 @@ function M.setup(opts)
   notify.setup({
     enabled = cfg.notify and cfg.notifications.enabled,
     window_ms = cfg.notifications.window_ms,
+    root = cfg.root,
   })
 
   drop_runtime()
@@ -210,6 +316,30 @@ end
 --- @return nil
 function M.send(text, whole)
   send(text, whole)
+end
+
+--- Ask the attached session to scroll its own view to the cursor's line.
+--- @return boolean sent
+function M.open()
+  return open_here()
+end
+
+--- Cancel the run in progress in the attached session.
+--- @return boolean sent
+function M.cancel()
+  return cancel()
+end
+
+--- Attach to a session, or resume looking for one after |:KoriDetach|.
+--- @return boolean started
+function M.attach()
+  return attach()
+end
+
+--- Stop reconnecting and drop the IDE socket. The pane keeps running.
+--- @return boolean detached
+function M.detach()
+  return detach()
 end
 
 --- Revert the kori edit under the cursor.
@@ -263,12 +393,14 @@ function M.hide()
 end
 
 --- The live runtime state, for tests and health checks.
---- @return table with spool, client, session and pane
+--- @return table with spool, client, session, turn, tool and pane
 function M._runtime()
   return {
     spool = runtime.spool,
     client = runtime.client,
     session = runtime.session,
+    turn = runtime.turn,
+    tool = runtime.tool,
     pane = pane.state(),
   }
 end
