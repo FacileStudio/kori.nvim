@@ -125,6 +125,52 @@ vim.fn.writefile({ "one", "two" }, no_payload)
 local second_first = edit.apply_path(no_payload, { tool = "write_file" })
 eq(shape(second_first.ranges), "", "without a base and without old/new, nothing is claimed")
 
+io.write("\n-- a before_tool_call snapshot is the base write_file and run_command lack\n")
+
+local function before(tool, input)
+  return edit.on_event({ event = "before_tool_call", tool = tool, input = vim.json.encode(input) })
+end
+
+local function after(tool, input)
+  return edit.on_event({ event = "after_tool_call", tool = tool, input = vim.json.encode(input) })
+end
+
+local made = tmp .. "/made.lua"
+eq(before("write_file", { path = made, content = "one\ntwo\n" }), nil, "a before event reports nothing to the UI")
+vim.fn.writefile({ "one", "two" }, made)
+eq(
+  shape(after("write_file", { path = made, content = "one\ntwo\n" }).ranges),
+  "1-2+2-0",
+  "a file kori created marks every line as added"
+)
+
+local replaced = tmp .. "/replaced.lua"
+vim.fn.writefile({ "keep", "old", "tail" }, replaced)
+before("write_file", { path = replaced, content = "new\n" })
+vim.fn.writefile({ "new" }, replaced)
+eq(
+  shape(after("write_file", { path = replaced, content = "new\n" }).ranges),
+  "1-1+1-3",
+  "an overwritten file is diffed against its pre-image, not claimed whole"
+)
+
+local ambiguous = tmp .. "/ambiguous.lua"
+vim.fn.writefile({ "same", "b", "c" }, ambiguous)
+before("edit_file", { path = ambiguous, old = "c", new = "same" })
+vim.fn.writefile({ "same", "b", "same" }, ambiguous)
+eq(
+  shape(after("edit_file", { path = ambiguous, old = "c", new = "same" }).ranges),
+  "3-3+1-1",
+  "the snapshot beats the old/new text when the new text is not unique"
+)
+
+local unreadable = tmp .. "/unreadable.lua"
+vim.fn.writefile({ "keep", "me" }, unreadable)
+vim.fn.setfperm(unreadable, "---------")
+eq(before("write_file", { path = unreadable, content = "new\n" }), nil, "a before event still reports nothing")
+eq(after("write_file", { path = unreadable, content = "new\n" }), nil, "a file that cannot be read is claimed nowhere")
+vim.fn.setfperm(unreadable, "rw-------")
+
 io.write("\n-- a modified buffer is never clobbered\n")
 
 vim.cmd("edit " .. vim.fn.fnameescape(file))
@@ -190,6 +236,83 @@ end)
 eq(state ~= nil, true, "the watcher starts")
 eq(seen, 0, "a fresh watcher replays nothing it already deleted")
 spool.stop(state)
+
+io.write("\n-- the before hook waits for the plugin to take the snapshot\n")
+
+local hand_dir = tmp .. "/hand-spool"
+vim.env.KORI_NVIM_SPOOL_DIR = hand_dir
+local hand_config = config.setup({ root = tmp, spool_dir = hand_dir })
+local hand_seen = {}
+local hand_state = spool.start(hand_config, function(payload)
+  hand_seen[#hand_seen + 1] = payload.event
+  edit.on_event(payload)
+end)
+
+local marker = hand_dir .. "/plugin"
+eq(vim.fn.filereadable(marker), 1, "the plugin publishes a marker while it watches")
+eq(tonumber(vim.fn.readfile(marker)[1]), vim.uv.os_getpid(), "the marker names this process")
+
+local watched = tmp .. "/watched.lua"
+vim.fn.writefile({ "before" }, watched)
+local hand_input = vim.json.encode({ path = watched, content = "after\n" })
+local hand_payload = vim.json.encode({
+  event = "before_tool_call",
+  tool = "write_file",
+  input = hand_input,
+})
+
+local exit_code
+local job = vim.fn.jobstart({ "sh", shim, "before" }, {
+  pty = false,
+  on_exit = function(_, code)
+    exit_code = code
+  end,
+})
+vim.fn.chansend(job, hand_payload)
+vim.fn.chanclose(job, "stdin")
+local returned = vim.wait(2000, function()
+  return exit_code ~= nil
+end, 20)
+
+eq(returned, true, "the before shim returns without waiting out its cap")
+eq(exit_code, 0, "it exits 0")
+eq(hand_seen[1], "before_tool_call", "the plugin was handed the before event")
+eq(#spool._list_requests(hand_dir), 0, "the request file was served and removed")
+
+vim.fn.writefile({ "after" }, watched)
+local hand_applied = edit.on_event({
+  event = "after_tool_call",
+  tool = "write_file",
+  input = hand_input,
+})
+eq(
+  shape(hand_applied.ranges),
+  "1-1+1-1",
+  "the pre-image taken during the handshake is what the diff is taken from"
+)
+spool.stop(hand_state)
+
+io.write("\n-- with no plugin watching, the hook does not hold the call up\n")
+
+local lonely = tmp .. "/lonely-spool"
+vim.fn.mkdir(lonely, "p")
+vim.env.KORI_NVIM_SPOOL_DIR = lonely
+
+local function before_shim()
+  local started = vim.uv.hrtime()
+  local out = vim.fn.system({ "sh", shim, "before" }, hand_payload)
+  return (vim.uv.hrtime() - started) / 1000000, out
+end
+
+local elapsed, printed = before_shim()
+eq(vim.v.shell_error, 0, "the shim exits 0 with no plugin watching")
+eq(printed, "", "it prints nothing")
+eq(elapsed < 400, true, ("it returns at once, not after its cap (%dms)"):format(elapsed))
+eq(#spool._list_requests(lonely), 0, "it leaves no request behind")
+
+vim.fn.writefile({ "9999999" }, lonely .. "/plugin")
+local stale, _ = before_shim()
+eq(stale < 400, true, ("a marker with no live process behind it is ignored (%dms)"):format(stale))
 
 io.write(("\n%d checks, %d failures\n"):format(checks, failures))
 os.exit(failures == 0 and 0 or 1)

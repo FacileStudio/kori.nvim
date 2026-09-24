@@ -236,7 +236,68 @@ local function apply_each(root, candidates, meta)
   return first
 end
 
---- Handle one after_tool_call payload from the shim.
+--- The absolute paths a tool call names, whichever tool it is.
+---
+--- The same resolution the after event uses: edit_file and write_file name
+--- their file in `path`, run_command names none and is parsed instead.
+--- @param cfg table the effective configuration
+--- @param tool string the tool name
+--- @param input table the decoded tool input
+--- @return table list of absolute paths
+local function targets(cfg, tool, input)
+  local candidates
+  if tool == "run_command" then
+    candidates = cmdedit.paths(input.command)
+  elseif type(input.path) == "string" then
+    candidates = { input.path }
+  else
+    candidates = {}
+  end
+  local paths = {}
+  for _, candidate in ipairs(candidates) do
+    local path = resolve(cfg.root, candidate)
+    if path then
+      paths[#paths + 1] = path
+    end
+  end
+  return paths
+end
+
+--- Remember what a file held before the tool runs, for the files it names.
+---
+--- write_file and run_command report no old text, so a file with no buffer has
+--- nothing to diff against and the change goes unmarked. This is the pre-image
+--- that fixes that, taken while the file still holds it. A path that does not
+--- exist yet is remembered as empty, which is what makes a new file report all
+--- its lines as added. Paths that exist but cannot be read are left out, so an
+--- unreadable file falls back to the old behaviour rather than being reported
+--- as entirely new.
+--- @param payload table decoded { event, tool, input }
+--- @return boolean whether anything was remembered
+function M.snapshot(payload)
+  local cfg = config.get()
+  if not cfg.enabled then
+    return false
+  end
+  local input = decode_input(payload.input)
+  if not input then
+    return false
+  end
+  local taken = false
+  for _, path in ipairs(targets(cfg, payload.tool, input)) do
+    local lines = read_lines(path)
+    if lines then
+      snapshots[path] = lines
+      taken = true
+    elseif vim.fn.getftype(path) == "" then
+      snapshots[path] = {}
+      taken = true
+    end
+  end
+  return taken
+end
+
+--- Handle one payload from the shim, before or after a tool call.
 ---
 --- edit_file and write_file name their file in `path`; run_command names none,
 --- so the command is parsed for the file it edits in place. Every candidate
@@ -248,6 +309,10 @@ end
 function M.on_event(payload)
   local cfg = config.get()
   if not cfg.enabled then
+    return nil
+  end
+  if payload.event == "before_tool_call" then
+    M.snapshot(payload)
     return nil
   end
   if payload.event ~= "after_tool_call" then

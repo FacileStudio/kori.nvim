@@ -57,6 +57,15 @@ function M.check()
         "Hooks are trusted per project: kori will ask before running one for the first time.",
       })
     end
+    if body:find("before_tool_call", 1, true) then
+      vim.health.ok("the before_tool_call hook is configured")
+    else
+      vim.health.warn("~/.kori.yml has no before_tool_call hook", {
+        "Without it, write_file and run_command on a file you never opened are",
+        "reported with no line ranges and no marks.",
+        "Add the second hooks entry from the README, with async: false.",
+      })
+    end
   else
     vim.health.info("no ~/.kori.yml found")
   end

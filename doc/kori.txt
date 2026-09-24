@@ -49,8 +49,8 @@ Then call |kori.setup()| when you want it.
 ==============================================================================
 4. THE KORI HOOK                                             *kori-hook*
 
-No kori release offers a socket yet, so edits are reported through a hook. Add
-this to `~/.kori.yml`, or to a project's `.kori.yml`: >
+No kori release offers a socket yet, so edits are reported through hooks. Add
+both of these to `~/.kori.yml`, or to a project's `.kori.yml`: >
 
     hooks:
       - name: kori.nvim
@@ -59,18 +59,37 @@ this to `~/.kori.yml`, or to a project's `.kori.yml`: >
         run: kori-nvim emit
         timeout: 2s
         async: true
+      - name: kori.nvim
+        on: before_tool_call
+        match: [edit_file, write_file, run_command]
+        run: kori-nvim before
+        timeout: 2s
+        async: false
 <
 
 `run_command` is listed because a shell command can edit a file in place, and
 the plugin ports kori's own parser for those commands. Leave it out and only
 `edit_file` and `write_file` are reported.
 
-`async: true` keeps the hook off the tool-call path. kori asks before running a
-hook it has not seen in a project before; that prompt is per repository.
+The first hook reports an edit once it has landed. The second is what gives a
+file you never opened in Neovim its line numbers: `write_file` and
+`run_command` report no old text, so the plugin needs a copy of the file from
+before the call to diff against. `kori-nvim before` hands over the paths the
+tool is about to touch and waits until the plugin has read them, so the tool
+cannot overwrite the file first. That is why it is `async: false`: an async
+hook would let the tool run before the copy was taken. The wait is bounded and
+skipped entirely when no Neovim is watching, so it costs a few milliseconds
+per editing call and nothing when you run kori with Neovim closed.
+
+`on:` takes one event per entry, so this is two entries rather than one. kori
+asks before running a hook it has not seen in a project before; that prompt is
+per repository.
 
 The shim appends one JSON line per edit to `$XDG_RUNTIME_DIR/kori-nvim/`, which
 the plugin tails. That directory is 0700 and its files 0600, because the payload
-carries the text of the edited file. The plugin deletes it on startup.
+carries the text of the edited file. The plugin deletes it on startup. While it
+watches, the plugin also leaves a `plugin` file there holding its pid, which is
+how the `before` shim knows whether anyone is there to answer it.
 
 ==============================================================================
 5. COMMANDS                                               *kori-commands*
@@ -207,7 +226,17 @@ the plugin with |:checkhealth| kori.
 
 The changed lines do not come from the hook payload. The payload says which file
 kori touched; the plugin then diffs the buffer against the file on disk, which
-is exact and works for any tool. That is why:
+is exact and works for any tool. The side it diffs from is, in order:
+
+- the buffer, when it is open and agrees with disk
+- the copy taken by the `before_tool_call` hook, when there is one
+- the old text `edit_file` reports, spliced back into the current content
+
+A file you never opened is therefore diffed against the copy taken just before
+the tool call, and a file kori creates is diffed against nothing, so every line
+reports as added. Without the `before` hook the created-file case still works
+and the rest fall back to the old text, which `write_file` and `run_command` do
+not carry. That is why:
 
 - a buffer with unsaved changes is never clobbered, and carries no marks while
   it disagrees with disk, since the line numbers would be wrong. A warning
@@ -220,7 +249,9 @@ name the file it wrote, so the plugin parses the in-place edit commands kori
 itself understands (`sed -i`, `awk -i`, `perl -i`) and takes the path from
 there. A command carrying real shell syntax, such as a pipe, a redirect, a glob
 or a variable, is refused rather than guessed at: `sed -i s/x/y/ f.go
-2>/dev/null` reports nothing, never the wrong file.
+2>/dev/null` reports nothing, never the wrong file. A `&&` chain is refused the
+same way, which in practice is how kori often writes one, so a command like
+`sed -i s/x/y/ f.go && cat f.go` is reported as nothing.
 
 ==============================================================================
 9. API                                                         *kori-api*

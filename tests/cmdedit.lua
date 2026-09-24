@@ -191,6 +191,36 @@ eq(
   "a closed file edited by shell has no base to diff, so it carries no spans"
 )
 
+local snapshotted = tmp .. "/snapshotted.go"
+vim.fn.writefile({ "package main", "", "func main() {}" }, snapshotted)
+edit.on_event({
+  event = "before_tool_call",
+  tool = "run_command",
+  input = vim.json.encode({ command = "sed -i 's/main/principal/' snapshotted.go" }),
+})
+vim.fn.writefile({ "package main", "", "func principal() {}" }, snapshotted)
+local shell_edit = edit.on_event({
+  event = "after_tool_call",
+  tool = "run_command",
+  input = vim.json.encode({ command = "sed -i 's/main/principal/' snapshotted.go" }),
+})
+eq(shell_edit ~= nil, true, "the shell edit is still applied")
+eq(shell_edit.had_buffer, false, "the file is still not open in a buffer")
+eq(shape(shell_edit.ranges), "3-3+1-1", "a shell edit of a closed file is diffed against its pre-image")
+
+edit.on_event({
+  event = "before_tool_call",
+  tool = "run_command",
+  input = vim.json.encode({ command = "cat a | sed -i 's/x/y/' snapshotted.go" }),
+})
+vim.fn.writefile({ "package main", "", "func principal() { changed }" }, snapshotted)
+local refused = edit.on_event({
+  event = "after_tool_call",
+  tool = "run_command",
+  input = vim.json.encode({ command = "cat a | sed -i 's/x/y/' snapshotted.go" }),
+})
+eq(refused, nil, "a refused command is still refused when a before event preceded it")
+
 local ghost = tmp .. "/ghost.go"
 eq(
   edit.on_event(payload("run_command", { command = "sed -i 's/x/y/' ghost.go" })),

@@ -30,7 +30,7 @@ ln -s "$PWD/bin/kori-nvim" ~/.local/bin/kori-nvim
 
 ## The kori hook
 
-No kori release offers a socket yet, so the plugin learns about edits the way kori already lets anything learn about them: a hook. Add this to `~/.kori.yml`, or to a project's `.kori.yml`:
+No kori release offers a socket yet, so the plugin learns about edits the way kori already lets anything learn about them: hooks. Add both of these to `~/.kori.yml`, or to a project's `.kori.yml`:
 
 ```yaml
 hooks:
@@ -40,15 +40,23 @@ hooks:
     run: kori-nvim emit
     timeout: 2s
     async: true
+  - name: kori.nvim
+    on: before_tool_call
+    match: [edit_file, write_file, run_command]
+    run: kori-nvim before
+    timeout: 2s
+    async: false
 ```
 
 `run_command` is in the list because a shell command can edit a file in place, and the plugin ports kori's own parser for those commands. Leave it out and only `edit_file` and `write_file` are reported.
 
-The block is verified against kori's own config loader. `async: true` keeps it off the tool-call path. kori asks before running a hook it has not seen in a project before; that prompt is per repo.
+The first hook reports an edit after it landed. The second is what lets the plugin say which lines changed in a file you never opened in Neovim: `write_file` and `run_command` report no old text, so without a copy of the file taken beforehand there is nothing to compare against. `kori-nvim before` hands the plugin the paths the tool is about to touch and waits for it to read them, so the tool cannot overwrite the file first. That is why it is `async: false`: an async hook would let the tool run before the copy was taken, which is the whole thing it is there to prevent. The wait is bounded, and skipped entirely when no Neovim is watching, so it costs a few milliseconds per editing call and nothing at all when you run kori without Neovim open.
 
-The shim writes one JSON line per edit into `$XDG_RUNTIME_DIR/kori-nvim/`, which the plugin tails. That directory is `0700` and the files are `0600`, because the payload carries the text of the file kori edited. The plugin deletes it on startup, so it does not outlive the session.
+`on:` takes one event per entry, so this is two entries rather than one. Both blocks are verified against kori's own config loader. kori asks before running a hook it has not seen in a project before; that prompt is per repo.
 
-Check it with `:checkhealth kori` if nothing happens.
+The shim writes one JSON line per edit into `$XDG_RUNTIME_DIR/kori-nvim/`, which the plugin tails. That directory is `0700` and the files are `0600`, because the payload carries the text of the file kori edited. The plugin deletes it on startup, so it does not outlive the session. While it is watching, the plugin also leaves a `plugin` file there holding its pid; that is how the `before` shim knows whether anyone is there to answer.
+
+Check it with `:checkhealth kori` if nothing happens. It reports a missing `before_tool_call` hook, since edits still land without one, just without line numbers for files you had not opened.
 
 ## What you get
 
@@ -126,7 +134,9 @@ Two consequences worth knowing:
 - A buffer with unsaved changes is never clobbered, and gets no marks while it disagrees with disk, because line numbers would be wrong. You get a warning naming the file instead; the marks come back when you reload it.
 - A file that is not open in a buffer is recorded in `:KoriChanges` and gets its marks when you open it. A file kori edits twice while closed is diffed from the first edit's content.
 
-`run_command` edits are covered too, as far as they can be: a shell command does not name the file it wrote, so the plugin parses the in-place edit commands kori itself understands (`sed -i`, `awk -i`, `perl -i`) and takes the path from there. Anything with real shell syntax — a pipe, a redirect, a glob, a variable — is refused rather than guessed at, so a command like `sed -i ... f.go 2>/dev/null` is reported as nothing rather than as the wrong file.
+What counts as the "before" side of that diff, in order: the buffer, when it is open and agrees with disk; otherwise the copy taken by the `before_tool_call` hook, when there is one; otherwise the old text `edit_file` reports, spliced back into the file's current content. So a file you never opened is diffed against the copy taken just before the tool call, and a file kori creates is diffed against nothing, which reports every line as added. Without the `before` hook the last case still works and the others fall back to the old text, which `write_file` and `run_command` do not carry — that is why the hook is worth adding.
+
+`run_command` edits are covered too, as far as they can be: a shell command does not name the file it wrote, so the plugin parses the in-place edit commands kori itself understands (`sed -i`, `awk -i`, `perl -i`) and takes the path from there. Anything with real shell syntax — a pipe, a redirect, a glob, a variable, a `&&` chain — is refused rather than guessed at, so a command like `sed -i ... f.go 2>/dev/null` is reported as nothing rather than as the wrong file. In practice kori often chains a command to its own follow-up, such as `sed -i ... f.go && cat f.go`, and that is refused too: the marker is real but the command shape no longer proves which file changed.
 
 ## Roadmap
 
@@ -142,9 +152,9 @@ Next: the IDE socket in kori (`~/.kori/ide/<pid>.json` plus a unix socket, spoke
 make test
 ```
 
-Runs every file in `tests/`, 332 checks in total:
+Runs every file in `tests/`, 354 checks in total:
 
-- `run.lua` — the diff-to-line-ranges logic, the reload and stale-buffer guards, and the shim end to end
+- `run.lua` — the diff-to-line-ranges logic, the reload and stale-buffer guards, the before-hook handshake, and the shim end to end
 - `follow.lua` — every `follow = "open"` outcome: beside the pane, in its own tab, and the refusals
 - `cmdedit.lua` — the port of kori's in-place command parser, including what it refuses
 - `revert.lua` — `:KoriRevert` and its safety floor

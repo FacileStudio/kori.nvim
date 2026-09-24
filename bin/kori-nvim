@@ -47,6 +47,36 @@ case "$command" in
     printf '\n' >>"$file" 2>/dev/null || true
     chmod 600 "$file" 2>/dev/null || true
     ;;
+  before)
+    # Hand the payload over and wait for the plugin to say it has the file's
+    # previous content, because the tool call this hook blocks is about to
+    # overwrite it. Without the wait the plugin reads the file after the tool
+    # has written it, and the pre-image is gone.
+    #
+    # The plugin publishes its pid in $spool_dir/plugin while it is watching. A
+    # marker with no live process behind it means nobody would answer, so the
+    # call is not held up for a plugin that is not there.
+    pid=""
+    if [ -f "$spool_dir/plugin" ]; then
+      pid=$(cat "$spool_dir/plugin" 2>/dev/null || true)
+    fi
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+      exit 0
+    fi
+    mkdir -p "$spool_dir" 2>/dev/null || exit 0
+    chmod 700 "$spool_dir" 2>/dev/null || true
+    req="$spool_dir/$$.req"
+    # A rename, so the plugin never reads a half-written payload.
+    cat >"$req.tmp" 2>/dev/null || exit 0
+    printf '\n' >>"$req.tmp" 2>/dev/null || true
+    mv "$req.tmp" "$req" 2>/dev/null || exit 0
+    waited=0
+    while [ -e "$req" ] && [ "$waited" -lt 100 ]; do
+      sleep 0.005
+      waited=$((waited + 1))
+    done
+    rm -f "$req" "$req.tmp" 2>/dev/null || true
+    ;;
   dir)
     printf '%s\n' "$spool_dir"
     ;;

@@ -6,6 +6,17 @@ All notable changes to kori.nvim. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The `before_tool_call` hook, so `write_file` and `run_command` get line ranges
+  and marks on a file you never opened. Those payloads carry no old text, so the
+  plugin takes a copy of the file while it still holds the pre-image, and
+  `kori-nvim before` waits for that copy before letting the tool run. The wait is
+  bounded and skipped when no Neovim is watching, so it costs nothing when kori
+  runs without one. Requires the second hook entry, documented in the README and
+  reported by `:checkhealth kori` when it is missing.
+- `:KoriHealth` warns when `~/.kori.yml` has no `before_tool_call` hook.
+
 ### Changed
 
 - `follow = "open"` opens the edited file in a window left of the chat pane when

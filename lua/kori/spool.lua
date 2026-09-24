@@ -106,6 +106,52 @@ local function list_spools(dir)
   return found
 end
 
+--- The marker telling the shim a plugin is here to answer it.
+local MARKER = "plugin"
+
+local function list_requests(dir)
+  local found = {}
+  local handle = uv.fs_scandir(dir)
+  if not handle then
+    return found
+  end
+  while true do
+    local name, kind = uv.fs_scandir_next(handle)
+    if not name then
+      break
+    end
+    if kind == "file" and name:sub(-4) == ".req" then
+      found[#found + 1] = dir .. "/" .. name
+    end
+  end
+  return found
+end
+
+local function announce(dir)
+  local fd = uv.fs_open(dir .. "/" .. MARKER, "w", 384)
+  if not fd then
+    return
+  end
+  uv.fs_write(fd, ("%d\n"):format(uv.os_getpid()))
+  uv.fs_close(fd)
+end
+
+--- Answer one before_tool_call request: take the snapshot, then remove the file
+--- the shim is waiting on. The order matters, and is the whole point of the
+--- handshake: the shim returns to kori, and the tool runs, only once the file
+--- has been read.
+local function serve(path, on_event, on_bad)
+  local data = read_from(path, 0)
+  if data and data ~= "" then
+    for line in data:gmatch("([^\n]+)") do
+      if line:match("%S") then
+        decode(line, on_event, on_bad)
+      end
+    end
+  end
+  pcall(uv.fs_unlink, path)
+end
+
 function M.start(cfg, on_event, on_bad)
   local dir = M.dir(cfg)
   if not mkdir(dir) then
@@ -122,6 +168,10 @@ function M.start(cfg, on_event, on_bad)
   for _, path in ipairs(list_spools(dir)) do
     pcall(uv.fs_unlink, path)
   end
+  for _, path in ipairs(list_requests(dir)) do
+    pcall(uv.fs_unlink, path)
+  end
+  announce(dir)
 
   local watching = pcall(function()
     local handle = uv.new_fs_event()
@@ -147,6 +197,9 @@ function M.poll(state, on_event, on_bad)
   if not state then
     return
   end
+  for _, path in ipairs(list_requests(state.dir)) do
+    serve(path, on_event, on_bad)
+  end
   for _, path in ipairs(list_spools(state.dir)) do
     state.watched[path] = true
     drain(state, path, on_event, on_bad)
@@ -157,6 +210,7 @@ function M.stop(state)
   if not state then
     return
   end
+  pcall(uv.fs_unlink, state.dir .. "/" .. MARKER)
   if state.handle then
     state.handle:stop()
     if not state.handle:is_closing() then
@@ -173,5 +227,6 @@ end
 
 M._read_from = read_from
 M._list_spools = list_spools
+M._list_requests = list_requests
 
 return M
