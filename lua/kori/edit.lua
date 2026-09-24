@@ -12,6 +12,29 @@ local function join(lines)
   return table.concat(lines, "\n") .. "\n"
 end
 
+local function split(text)
+  if text == "" then
+    return {}
+  end
+  local trimmed = text:sub(-1) == "\n" and text:sub(1, -2) or text
+  return vim.split(trimmed, "\n", { plain = true })
+end
+
+local function before_lines(lines, meta)
+  if type(meta) ~= "table" or type(meta.old) ~= "string" or type(meta.new) ~= "string" then
+    return nil
+  end
+  if meta.new == "" then
+    return nil
+  end
+  local text = join(lines)
+  local from, to = text:find(meta.new, 1, true)
+  if not from then
+    return nil
+  end
+  return split(text:sub(1, from - 1) .. meta.old .. text:sub(to + 1))
+end
+
 local function decode_input(input)
   if type(input) == "table" then
     return input
@@ -126,19 +149,20 @@ function M.apply_path(path, meta)
   end
   local buf = buf_for(path)
   local stale = buf ~= nil and vim.api.nvim_get_option_value("modified", { buf = buf })
-  local ranges
 
-  if stale then
-    local snapshot = snapshots[path]
-    ranges = snapshot and M.ranges_from(snapshot, lines) or {}
-  elseif buf then
-    ranges = M.ranges_from(vim.api.nvim_buf_get_lines(buf, 0, -1, false), lines)
-    if config.get().reload.enabled then
-      M.reload(buf)
-    end
-  else
-    local snapshot = snapshots[path]
-    ranges = snapshot and M.ranges_from(snapshot, lines) or {}
+  local base
+  if buf and not stale then
+    base = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  elseif snapshots[path] then
+    base = snapshots[path]
+  elseif meta then
+    base = before_lines(lines, meta)
+  end
+
+  local ranges = base and M.ranges_from(base, lines) or {}
+
+  if buf and not stale and config.get().reload.enabled then
+    M.reload(buf)
   end
 
   snapshots[path] = lines
@@ -162,7 +186,7 @@ function M.on_event(payload)
   if not path then
     return nil
   end
-  return M.apply_path(path, { tool = payload.tool })
+  return M.apply_path(path, { tool = payload.tool, old = input.old, new = input.new })
 end
 
 function M.forget(path)

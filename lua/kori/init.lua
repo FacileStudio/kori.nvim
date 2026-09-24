@@ -86,6 +86,9 @@ local function keymaps(cfg)
       vim.notify("kori.nvim: no kori edits in this buffer", vim.log.levels.INFO)
     end
   end, "kori: previous edit")
+  map("<leader>ko", function()
+    M.start()
+  end, "kori: open chat pane")
   map("<leader>kc", function()
     ui.changes()
   end, "kori: changes")
@@ -148,12 +151,56 @@ function M.statusline()
   return ui.status()
 end
 
+function M.pane()
+  if runtime.pane and vim.api.nvim_buf_is_valid(runtime.pane.buf) then
+    local wins = vim.fn.win_findbuf(runtime.pane.buf)
+    if #wins > 0 then
+      return wins[1]
+    end
+  end
+  runtime.pane = nil
+  return nil
+end
+
 function M.start(cmd)
   local cfg = config.get()
-  local argv = cmd or { "kori" }
+
+  local existing = M.pane()
+  if existing then
+    vim.api.nvim_set_current_win(existing)
+    vim.cmd("startinsert")
+    return
+  end
+
+  local argv = cmd
+  if not argv or #argv == 0 then
+    argv = { "kori" }
+  end
+
+  local parent = vim.api.nvim_get_current_win()
   vim.cmd("botright vsplit")
   vim.cmd("vertical resize " .. cfg.ui.term_width)
-  vim.fn.termopen(argv, { cwd = cfg.root, env = { KORI_NVIM_SPOOL_DIR = spool.dir(cfg) } })
+
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_win_get_buf(win)
+  vim.api.nvim_set_option_value("filetype", "kori", { buf = buf })
+  vim.api.nvim_buf_set_name(buf, ("kori://%d"):format(buf))
+  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+
+  local ok, err = pcall(vim.fn.termopen, argv, {
+    cwd = cfg.root,
+    env = { KORI_NVIM_SPOOL_DIR = spool.dir(cfg) },
+  })
+  if not ok then
+    vim.notify("kori.nvim: could not start kori: " .. tostring(err), vim.log.levels.ERROR)
+    vim.api.nvim_win_close(win, true)
+    if vim.api.nvim_win_is_valid(parent) then
+      vim.api.nvim_set_current_win(parent)
+    end
+    return
+  end
+
+  runtime.pane = { win = win, buf = buf }
   vim.cmd("startinsert")
 end
 

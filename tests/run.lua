@@ -111,6 +111,20 @@ eq(
   "the second reload landed too"
 )
 
+io.write("\n-- a closed file is marked from the payload's own old/new\n")
+
+local closed = tmp .. "/closed.lua"
+vim.fn.writefile({ "local a = 1", "local b = 22", "local c = 3" }, closed)
+local first = edit.apply_path(closed, { tool = "edit_file", old = "local b = 2", new = "local b = 22" })
+eq(first.had_buffer, false, "the file was not open in a buffer")
+eq(shape(first.ranges), "2-2+1-1", "the first edit of a closed file still gets a range")
+eq(marks.of(closed) ~= nil, true, "the closed file is recorded for the changes panel")
+
+local no_payload = tmp .. "/no-payload.lua"
+vim.fn.writefile({ "one", "two" }, no_payload)
+local second_first = edit.apply_path(no_payload, { tool = "write_file" })
+eq(shape(second_first.ranges), "", "without a base and without old/new, nothing is claimed")
+
 io.write("\n-- a modified buffer is never clobbered\n")
 
 vim.cmd("edit " .. vim.fn.fnameescape(file))
