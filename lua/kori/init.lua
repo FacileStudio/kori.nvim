@@ -1,127 +1,184 @@
 local M = {}
 
+local accept = require("kori.accept")
+local approval = require("kori.approval")
 local config = require("kori.config")
-local spool = require("kori.spool")
+local context = require("kori.context")
 local edit = require("kori.edit")
+local ide = require("kori.ide")
+local keymaps = require("kori.keymaps")
 local marks = require("kori.marks")
+local notify = require("kori.notify")
+local pane = require("kori.pane")
+local revert = require("kori.revert")
+local spool = require("kori.spool")
 local ui = require("kori.ui")
 
-local runtime = { spool = nil, autocmds = nil }
+local runtime = { spool = nil, client = nil, session = nil, autocmds = {} }
 
-local function apply_marks_of_current_buffer()
-  local name = vim.api.nvim_buf_get_name(0)
-  if name == "" then
+local function warn(msg)
+  vim.notify("kori.nvim: " .. msg, vim.log.levels.WARN)
+end
+
+local function peek_here()
+  local path = context.path()
+  local entry = path ~= "" and marks.of(path) or nil
+  if not entry or #entry.ranges == 0 then
+    vim.notify("kori.nvim: no kori edits in this buffer", vim.log.levels.INFO)
     return
   end
-  local path = vim.fn.fnamemodify(name, ":p")
-  local entry = marks.state[path]
-  if entry and not vim.api.nvim_get_option_value("modified", { buf = 0 }) then
-    marks.apply(0, entry)
+  ui.peek(path, entry.ranges)
+end
+
+local function revert_here()
+  local path = context.path()
+  if path == "" then
+    warn("this buffer has no file to revert")
+    return
+  end
+  local ok, reason = revert.buffer(0, path)
+  if ok then
+    vim.notify("kori.nvim: reverted the edit here", vim.log.levels.INFO)
+  else
+    warn(tostring(reason))
   end
 end
 
-local function follow(path, ranges)
-  local cfg = config.get()
-  if cfg.follow == "off" then
+local function attached()
+  return runtime.client ~= nil and runtime.client:is_connected()
+end
+
+local function send(prompt, whole)
+  if not attached() then
+    warn("no kori session is attached, start one with :KoriToggle")
     return
   end
-  if cfg.follow == "peek" then
-    ui.peek(path, ranges)
-    return
-  end
-  local buf = nil
-  for _, candidate in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(candidate) and vim.api.nvim_buf_get_name(candidate) ~= "" then
-      if vim.fn.fnamemodify(vim.api.nvim_buf_get_name(candidate), ":p") == path then
-        buf = candidate
-        break
+  local text = prompt
+  if not text or text == "" then
+    vim.ui.input({ prompt = "kori: " }, function(typed)
+      if typed and typed ~= "" then
+        runtime.client:send_prompt(context.payload(typed, whole))
       end
-    end
-  end
-  ui.open(path, ranges, buf)
-end
-
-local function handle(result)
-  if not result then
+    end)
     return
   end
-  if result.stale then
-    vim.notify(
-      ("kori changed %s, but the buffer has unsaved changes"):format(vim.fn.fnamemodify(result.path, ":t")),
-      vim.log.levels.WARN
-    )
-    return
-  end
-  ui.notify(result.path, result.ranges)
-  follow(result.path, result.ranges)
-  vim.api.nvim_exec_autocmds("User", { pattern = "KoriEdit", data = result })
+  runtime.client:send_prompt(context.payload(text, whole))
 end
 
-local function on_event(payload)
+local function on_spool_event(payload)
   local result = edit.on_event(payload)
   if result then
     vim.schedule(function()
-      handle(result)
+      accept.edit(result)
     end)
   end
 end
 
-local function keymaps(cfg)
-  if not cfg.keymaps then
+local function on_ide_event(ev)
+  local kind = ev.t
+  if kind == "hello" then
+    runtime.session = ev
     return
   end
-  local function map(lhs, rhs, desc)
-    if vim.fn.maparg(lhs, "n") ~= "" then
-      return
-    end
-    vim.keymap.set("n", lhs, rhs, { desc = desc })
+  if kind == "edit" then
+    accept.edit(edit.apply_remote(ev.path, {
+      { first = ev.first, last = ev.last, added = ev.added, removed = ev.removed },
+    }, { tool = ev.tool }))
+    return
   end
-  map("]r", function()
-    if not marks.jump(0, 1) then
-      vim.notify("kori.nvim: no kori edits in this buffer", vim.log.levels.INFO)
-    end
-  end, "kori: next edit")
-  map("[r", function()
-    if not marks.jump(0, -1) then
-      vim.notify("kori.nvim: no kori edits in this buffer", vim.log.levels.INFO)
-    end
-  end, "kori: previous edit")
-  map("<leader>ko", function()
-    M.toggle()
-  end, "kori: toggle chat pane")
-  map("<leader>kc", function()
-    ui.changes()
-  end, "kori: changes")
-  map("<leader>kp", function()
-    local path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p")
-    local entry = marks.of(path)
-    if not entry or #entry.ranges == 0 then
-      vim.notify("kori.nvim: no kori edits in this buffer", vim.log.levels.INFO)
-      return
-    end
-    ui.peek(path, entry.ranges)
-  end, "kori: peek last edit")
+  if kind == "tool" then
+    accept.tool(ev)
+    return
+  end
+  if kind == "approval" then
+    approval.handle(ev, function(id, allow)
+      if runtime.client then
+        runtime.client:send_approval({ id = id, allow = allow })
+      end
+    end)
+    return
+  end
+  if kind == "done" then
+    vim.notify(("kori finished (%s)"):format(ev.reason or "end_turn"), vim.log.levels.INFO)
+  end
 end
 
+local function install_keymaps()
+  keymaps.install({
+    marks = marks,
+    toggle = function()
+      pane.toggle()
+    end,
+    changes = function()
+      ui.changes()
+    end,
+    peek = peek_here,
+    revert = revert_here,
+    send = function()
+      send(nil, false)
+    end,
+  })
+end
+
+local function drop_runtime()
+  if runtime.spool then
+    spool.stop(runtime.spool)
+    runtime.spool = nil
+  end
+  if runtime.client then
+    runtime.client:stop()
+    runtime.client = nil
+  end
+  notify.cancel()
+  for _, id in ipairs(runtime.autocmds) do
+    pcall(vim.api.nvim_del_autocmd, id)
+  end
+  runtime.autocmds = {}
+end
+
+local function watch_spool(cfg)
+  local state, err = spool.start(cfg, on_spool_event)
+  if err then
+    vim.notify("kori.nvim: " .. err, vim.log.levels.ERROR)
+    return
+  end
+  runtime.spool = state
+end
+
+local function attach_ide(cfg)
+  if not cfg.ide.enabled then
+    return
+  end
+  runtime.client = ide.setup({
+    root = cfg.root,
+    dir = cfg.ide.dir,
+    retry_min = cfg.ide.retry_min_ms,
+    retry_max = cfg.ide.retry_max_ms,
+    on_event = on_ide_event,
+    on_status = function(state)
+      vim.api.nvim_exec_autocmds("User", { pattern = "KoriStatus", data = { state = state } })
+    end,
+  })
+  runtime.client:start()
+end
+
+--- Configure the plugin and start watching for kori's edits.
+--- @param opts table|nil options, merged over the defaults
+--- @return table the effective configuration
 function M.setup(opts)
   local cfg = config.setup(opts)
 
   marks.setup(cfg.marks)
+  notify.setup({
+    enabled = cfg.notify and cfg.notifications.enabled,
+    window_ms = cfg.notifications.window_ms,
+  })
 
-  if runtime.spool then
-    spool.stop(runtime.spool)
-  end
-  if runtime.autocmds then
-    for _, id in ipairs(runtime.autocmds) do
-      pcall(vim.api.nvim_del_autocmd, id)
-    end
-  end
-  runtime.autocmds = {}
-
-  keymaps(cfg)
+  drop_runtime()
+  install_keymaps()
 
   runtime.autocmds[#runtime.autocmds + 1] = vim.api.nvim_create_autocmd("BufReadPost", {
-    callback = apply_marks_of_current_buffer,
+    callback = accept.refresh_current_buffer,
     desc = "kori: reapply edit marks",
   })
 
@@ -129,166 +186,91 @@ function M.setup(opts)
     return cfg
   end
 
-  local state, err = spool.start(cfg, on_event)
-  if err then
-    vim.notify("kori.nvim: " .. err, vim.log.levels.ERROR)
-    return cfg
-  end
-  runtime.spool = state
+  watch_spool(cfg)
+  attach_ide(cfg)
   return cfg
 end
 
+--- Show the files and hunks kori changed.
+--- @return nil
 function M.changes()
   ui.changes()
 end
 
+--- Forget every recorded edit.
+--- @return nil
 function M.clear()
   marks.clear()
   edit.forget_all()
 end
 
+--- Send a prompt to the attached session, using the current editor context.
+--- @param text string|nil the prompt, or nil to ask interactively
+--- @param whole boolean|nil send the whole buffer rather than the selection
+--- @return nil
+function M.send(text, whole)
+  send(text, whole)
+end
+
+--- Revert the kori edit under the cursor.
+--- @return boolean reverted, string|nil reason
+function M.revert()
+  return revert.buffer(0, context.path())
+end
+
+--- Whether an IDE session is attached.
+--- @return boolean
+function M.connected()
+  return attached()
+end
+
+--- A statusline fragment describing kori's recent edits.
+--- @return string
 function M.statusline()
   return ui.status()
 end
 
-local function pane_windows()
-  local pane = runtime.pane
-  if not pane or not vim.api.nvim_buf_is_valid(pane.buf) then
-    return {}
-  end
-  local tab = vim.api.nvim_get_current_tabpage()
-  local wins = {}
-  for _, win in ipairs(vim.fn.win_findbuf(pane.buf)) do
-    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_tabpage(win) == tab then
-      wins[#wins + 1] = win
-    end
-  end
-  return wins
-end
-
-local function pane_running(buf)
-  local chan = vim.api.nvim_get_option_value("channel", { buf = buf })
-  if not chan or chan == 0 then
-    return false
-  end
-  local ok, status = pcall(vim.fn.jobwait, { chan }, 0)
-  return ok and status[1] == -1
-end
-
-function M.pane()
-  return pane_windows()[1]
-end
-
-function M.is_open()
-  return #pane_windows() > 0
-end
-
-function M.hide()
-  local wins = pane_windows()
-  if #wins == 0 then
-    return false
-  end
-  if #wins >= #vim.api.nvim_tabpage_list_wins(0) then
-    vim.notify("kori.nvim: refusing to close the last window", vim.log.levels.WARN)
-    return false
-  end
-  for _, win in ipairs(wins) do
-    pcall(vim.api.nvim_win_close, win, true)
-  end
-  return true
-end
-
-local function widen(cfg)
-  if cfg.ui.term_width > 0 then
-    vim.cmd("vertical resize " .. cfg.ui.term_width)
-  end
-end
-
-local function reveal(cfg, buf)
-  vim.cmd("botright vsplit")
-  local win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(win, buf)
-  widen(cfg)
-  vim.api.nvim_set_current_win(win)
-  vim.cmd("startinsert")
-  return win
-end
-
-local function spawn(cfg, argv)
-  vim.cmd("botright vnew")
-  local win = vim.api.nvim_get_current_win()
-  local buf = vim.api.nvim_win_get_buf(win)
-  vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
-  widen(cfg)
-
-  local ok, job = pcall(vim.fn.termopen, argv, {
-    cwd = cfg.root,
-    env = { KORI_NVIM_SPOOL_DIR = spool.dir(cfg) },
-  })
-  if not ok or not job or job <= 0 then
-    pcall(vim.api.nvim_win_close, win, true)
-    return nil, ("could not run %s"):format(table.concat(argv, " "))
-  end
-
-  vim.api.nvim_set_option_value("filetype", "kori", { buf = buf })
-  runtime.pane = { win = win, buf = buf }
-  vim.cmd("startinsert")
-  return win
-end
-
+--- Open the chat pane.
+--- @param cmd table|nil command and arguments, defaulting to kori
+--- @return boolean opened
 function M.start(cmd)
-  local cfg = config.get()
-
-  local wins = pane_windows()
-  if #wins > 0 and pane_running(runtime.pane.buf) then
-    vim.api.nvim_set_current_win(wins[1])
-    vim.cmd("startinsert")
-    return true
-  end
-
-  if #wins > 0 then
-    if #wins >= #vim.api.nvim_tabpage_list_wins(0) then
-      vim.cmd("botright vnew")
-    end
-    for _, win in ipairs(wins) do
-      pcall(vim.api.nvim_win_close, win, true)
-    end
-    runtime.pane = nil
-  end
-
-  local buf = runtime.pane and runtime.pane.buf
-  if buf and vim.api.nvim_buf_is_valid(buf) then
-    if pane_running(buf) then
-      reveal(cfg, buf)
-      return true
-    end
-    runtime.pane = nil
-  end
-
-  local argv = cmd
-  if not argv or #argv == 0 then
-    argv = { "kori" }
-  end
-
-  local _, err = spawn(cfg, argv)
-  if err then
-    vim.notify("kori.nvim: " .. err, vim.log.levels.ERROR)
-    return false
-  end
-  return true
+  return pane.start(cmd)
 end
 
+--- Open the pane if closed, close it if open.
+--- @param cmd table|nil command and arguments, defaulting to kori
+--- @return boolean open afterwards
 function M.toggle(cmd)
-  if M.is_open() then
-    M.hide()
-    return false
-  end
-  M.start(cmd)
-  return M.is_open()
+  return pane.toggle(cmd)
 end
 
+--- The window holding the pane, or nil.
+--- @return integer|nil win
+function M.pane()
+  return pane.pane()
+end
+
+--- Whether the pane is on screen.
+--- @return boolean
+function M.is_open()
+  return pane.is_open()
+end
+
+--- Close the pane window, leaving kori running.
+--- @return boolean closed
+function M.hide()
+  return pane.hide()
+end
+
+--- The live runtime state, for tests and health checks.
+--- @return table with spool, client, session and pane
 function M._runtime()
-  return runtime
+  return {
+    spool = runtime.spool,
+    client = runtime.client,
+    session = runtime.session,
+    pane = pane.state(),
+  }
 end
 
 return M

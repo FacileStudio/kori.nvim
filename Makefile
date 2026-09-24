@@ -1,8 +1,14 @@
 NVIM ?= nvim
+TESTS := $(wildcard tests/*.lua)
 
 .PHONY: test test-unit test-pane test-live lint
 
-test: test-unit test-pane test-live
+test:
+	@fail=0; for f in $(TESTS); do \
+		echo "== $$f"; \
+		$(NVIM) --headless -u NONE -l "$$f" || fail=1; \
+	done; \
+	exit $$fail
 
 test-unit:
 	$(NVIM) --headless -u NONE -l tests/run.lua

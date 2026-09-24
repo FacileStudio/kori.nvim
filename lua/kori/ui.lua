@@ -2,6 +2,7 @@ local M = {}
 
 local config = require("kori.config")
 local marks = require("kori.marks")
+local notify = require("kori.notify")
 
 local function display(path)
   local root = config.get().root
@@ -11,21 +12,12 @@ local function display(path)
   return vim.fn.fnamemodify(path, ":~")
 end
 
+--- Queue kori's edit notification for a path, coalesced by `kori.notify`.
+--- @param path string absolute path of the file kori edited
+--- @param ranges table list of `{ first, last, added, removed }` from one edit event
+--- @return boolean true when the edit was queued
 function M.notify(path, ranges)
-  local cfg = config.get()
-  if not cfg.notify then
-    return
-  end
-  local added, removed = 0, 0
-  for _, range in ipairs(ranges) do
-    added = added + range.added
-    removed = removed + range.removed
-  end
-  local where = #ranges == 1 and ("line " .. ranges[1].first) or (#ranges .. " places")
-  vim.notify(
-    ("kori changed %s (%s, +%d -%d)"):format(display(path), where, added, removed),
-    vim.log.levels.INFO
-  )
+  return notify.record(path, ranges)
 end
 
 local peek_win
@@ -95,25 +87,16 @@ function M.open(path, ranges, buf)
   if busy() then
     return false
   end
-  if not buf then
-    local current = vim.api.nvim_get_current_buf()
-    if vim.api.nvim_get_option_value("modified", { buf = current }) and not vim.o.hidden then
-      return false
-    end
-  end
   if buf and vim.api.nvim_get_option_value("modified", { buf = buf }) then
     return false
   end
-  local target = buf
-  if target then
-    local wins = vim.fn.win_findbuf(target)
-    if #wins > 0 then
-      vim.api.nvim_set_current_win(wins[1])
-    else
-      vim.cmd("keepalt split " .. vim.fn.fnameescape(path))
-    end
+  local wins = buf and vim.fn.win_findbuf(buf) or {}
+  if #wins > 0 then
+    vim.api.nvim_set_current_win(wins[1])
+  elseif buf then
+    vim.cmd("tab sbuffer " .. buf)
   else
-    vim.cmd("keepalt split " .. vim.fn.fnameescape(path))
+    vim.cmd("tabedit " .. vim.fn.fnameescape(path))
   end
   local line = math.min(ranges[1].first, vim.api.nvim_buf_line_count(0))
   vim.api.nvim_win_set_cursor(0, { line, 0 })

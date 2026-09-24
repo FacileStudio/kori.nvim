@@ -7,6 +7,7 @@ M.defaults = {
   follow = "off",
   keymaps = true,
   notify = true,
+  statusline = true,
   reload = {
     enabled = true,
     debounce_ms = 120,
@@ -15,6 +16,16 @@ M.defaults = {
     enabled = true,
     signs = true,
     virtual_text = true,
+  },
+  notifications = {
+    enabled = true,
+    window_ms = 250,
+  },
+  ide = {
+    enabled = true,
+    dir = nil,
+    retry_min_ms = 500,
+    retry_max_ms = 10000,
   },
   ui = {
     panel_height = 10,
@@ -39,6 +50,18 @@ local function validate(cfg)
   end
   if type(cfg.reload.debounce_ms) ~= "number" or cfg.reload.debounce_ms < 0 then
     return nil, "reload.debounce_ms must be a non-negative number"
+  end
+  if type(cfg.notifications.window_ms) ~= "number" or cfg.notifications.window_ms < 0 then
+    return nil, "notifications.window_ms must be a non-negative number"
+  end
+  if cfg.ide.dir ~= nil and not is_string(cfg.ide.dir) then
+    return nil, "ide.dir must be a string or nil"
+  end
+  if type(cfg.ide.retry_min_ms) ~= "number" or type(cfg.ide.retry_max_ms) ~= "number" then
+    return nil, "ide.retry_min_ms and ide.retry_max_ms must be numbers"
+  end
+  if cfg.ide.retry_max_ms < cfg.ide.retry_min_ms then
+    return nil, "ide.retry_max_ms must not be smaller than ide.retry_min_ms"
   end
   return true
 end
