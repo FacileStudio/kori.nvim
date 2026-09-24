@@ -54,11 +54,14 @@ Check it with `:checkhealth kori` if nothing happens.
 |---|---|---|
 | `]r` | | next edit kori made in this buffer |
 | `[r` | | previous edit |
-| `<leader>ko` | `:KoriStart [cmd]` | open the chat pane, a right-hand split running kori |
+| `<leader>ko` | `:KoriToggle` | toggle the chat pane: a right-hand split running kori |
 | `<leader>kc` | `:KoriChanges` | every file and hunk kori changed, `⏎` opens at the first hunk |
 | `<leader>kp` | `:KoriPeek` | float showing the last edit with context, without taking focus |
+| | `:KoriStart [cmd]` | open the pane, optionally running something other than kori |
 | | `:KoriClear` | forget every recorded edit |
 | | `:KoriHealth` | health check |
+
+The pane opens to the right in its own buffer, so it never takes over the file you are editing, and it works from the dashboard. Toggling it off hides the window but leaves kori running, so toggling back returns to the same session. After kori exits, `:KoriStart` starts a fresh one.
 
 Statusline:
 

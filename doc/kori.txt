@@ -81,10 +81,19 @@ carries the text of the edited file. The plugin deletes it on startup.
 :KoriPeek                                                        *:KoriPeek*
     Show the last edit in the current buffer in a float, without taking focus.
 
+:KoriToggle                                                    *:KoriToggle*
+    Toggle the chat pane. Opens a right-hand split running kori, or closes it
+    if it is already open. The pane has its own buffer, so it never takes over
+    the file you are editing, and it opens from the dashboard too.
+
+    Closing the pane hides its window and leaves kori running, so toggling back
+    returns to the same session. Closing it does nothing when the pane is your
+    only window.
+
 :KoriStart [cmd]                                                *:KoriStart*
-    Open a right-hand vertical split running kori. Pressing it again focuses
-    the pane that is already open rather than starting a second one. Optional
-    arguments replace the command, so `:KoriStart kori --model opus` works.
+    Open the pane without toggling it closed. Optional arguments replace the
+    command, so `:KoriStart kori --model opus` works. When the pane is open and
+    its process has exited, this starts a fresh one.
 
 :KoriHealth                                                    *:KoriHealth*
     Run the health check in the current buffer.
@@ -98,10 +107,8 @@ carries the text of the edited file. The plugin deletes it on startup.
 [r                                                   *[r* *kori-prev-edit*
     Jump to the previous edit. Wraps.
 
-<leader>ko                                            *<leader>ko* *kori-open-pane*
-    |:KoriStart| with no arguments: open the chat pane, a right-hand split
-    running kori. Pressing it again returns to the pane instead of opening a
-    second one.
+<leader>ko                                                 *<leader>ko* *kori-toggle*
+    |:KoriToggle|: open the chat pane if it is closed, close it if it is open.
 
 <leader>kc                                              *<leader>kc* *kori-changes*
     |:KoriChanges|
@@ -190,6 +197,17 @@ kori.clear()                                                    *kori.clear()*
     |:KoriClear|
 
 kori.start({cmd})                                              *kori.start()*
-    Open the chat pane. With no argument, runs kori. Reuses an open pane.
+    Open the chat pane. With no argument, runs kori. Reuses a live pane, and
+    replaces one whose process has exited. Returns false on failure.
+
+kori.toggle({cmd})                                            *kori.toggle()*
+    Open the pane if it is closed, close it if it is open. Returns whether the
+    pane is open afterwards. Closing hides the window; kori keeps running.
+
+kori.is_open()                                              *kori.is_open()*
+    Whether the pane is on screen.
+
+kori.hide()                                                    *kori.hide()*
+    Close the pane window, leaving kori running.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

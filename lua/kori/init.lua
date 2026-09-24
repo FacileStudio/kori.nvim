@@ -87,8 +87,8 @@ local function keymaps(cfg)
     end
   end, "kori: previous edit")
   map("<leader>ko", function()
-    M.start()
-  end, "kori: open chat pane")
+    M.toggle()
+  end, "kori: toggle chat pane")
   map("<leader>kc", function()
     ui.changes()
   end, "kori: changes")
@@ -151,25 +151,118 @@ function M.statusline()
   return ui.status()
 end
 
-function M.pane()
-  if runtime.pane and vim.api.nvim_buf_is_valid(runtime.pane.buf) then
-    local wins = vim.fn.win_findbuf(runtime.pane.buf)
-    if #wins > 0 then
-      return wins[1]
+local function pane_windows()
+  local pane = runtime.pane
+  if not pane or not vim.api.nvim_buf_is_valid(pane.buf) then
+    return {}
+  end
+  local tab = vim.api.nvim_get_current_tabpage()
+  local wins = {}
+  for _, win in ipairs(vim.fn.win_findbuf(pane.buf)) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_tabpage(win) == tab then
+      wins[#wins + 1] = win
     end
   end
-  runtime.pane = nil
-  return nil
+  return wins
+end
+
+local function pane_running(buf)
+  local chan = vim.api.nvim_get_option_value("channel", { buf = buf })
+  if not chan or chan == 0 then
+    return false
+  end
+  local ok, status = pcall(vim.fn.jobwait, { chan }, 0)
+  return ok and status[1] == -1
+end
+
+function M.pane()
+  return pane_windows()[1]
+end
+
+function M.is_open()
+  return #pane_windows() > 0
+end
+
+function M.hide()
+  local wins = pane_windows()
+  if #wins == 0 then
+    return false
+  end
+  if #wins >= #vim.api.nvim_tabpage_list_wins(0) then
+    vim.notify("kori.nvim: refusing to close the last window", vim.log.levels.WARN)
+    return false
+  end
+  for _, win in ipairs(wins) do
+    pcall(vim.api.nvim_win_close, win, true)
+  end
+  return true
+end
+
+local function widen(cfg)
+  if cfg.ui.term_width > 0 then
+    vim.cmd("vertical resize " .. cfg.ui.term_width)
+  end
+end
+
+local function reveal(cfg, buf)
+  vim.cmd("botright vsplit")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+  widen(cfg)
+  vim.api.nvim_set_current_win(win)
+  vim.cmd("startinsert")
+  return win
+end
+
+local function spawn(cfg, argv)
+  vim.cmd("botright vnew")
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_win_get_buf(win)
+  vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
+  widen(cfg)
+
+  local ok, job = pcall(vim.fn.termopen, argv, {
+    cwd = cfg.root,
+    env = { KORI_NVIM_SPOOL_DIR = spool.dir(cfg) },
+  })
+  if not ok or not job or job <= 0 then
+    pcall(vim.api.nvim_win_close, win, true)
+    return nil, ("could not run %s"):format(table.concat(argv, " "))
+  end
+
+  vim.api.nvim_set_option_value("filetype", "kori", { buf = buf })
+  runtime.pane = { win = win, buf = buf }
+  vim.cmd("startinsert")
+  return win
 end
 
 function M.start(cmd)
   local cfg = config.get()
 
-  local existing = M.pane()
-  if existing then
-    vim.api.nvim_set_current_win(existing)
+  local wins = pane_windows()
+  if #wins > 0 and pane_running(runtime.pane.buf) then
+    vim.api.nvim_set_current_win(wins[1])
     vim.cmd("startinsert")
-    return
+    return true
+  end
+
+  if #wins > 0 then
+    if #wins >= #vim.api.nvim_tabpage_list_wins(0) then
+      vim.cmd("botright vnew")
+    end
+    for _, win in ipairs(wins) do
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+    runtime.pane = nil
+  end
+
+  local buf = runtime.pane and runtime.pane.buf
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    if pane_running(buf) then
+      reveal(cfg, buf)
+      return true
+    end
+    runtime.pane = nil
   end
 
   local argv = cmd
@@ -177,30 +270,21 @@ function M.start(cmd)
     argv = { "kori" }
   end
 
-  local parent = vim.api.nvim_get_current_win()
-  vim.cmd("botright vsplit")
-  vim.cmd("vertical resize " .. cfg.ui.term_width)
-
-  local win = vim.api.nvim_get_current_win()
-  local buf = vim.api.nvim_win_get_buf(win)
-  vim.api.nvim_set_option_value("filetype", "kori", { buf = buf })
-  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
-
-  local ok, err = pcall(vim.fn.termopen, argv, {
-    cwd = cfg.root,
-    env = { KORI_NVIM_SPOOL_DIR = spool.dir(cfg) },
-  })
-  if not ok then
-    vim.notify("kori.nvim: could not start kori: " .. tostring(err), vim.log.levels.ERROR)
-    vim.api.nvim_win_close(win, true)
-    if vim.api.nvim_win_is_valid(parent) then
-      vim.api.nvim_set_current_win(parent)
-    end
-    return
+  local _, err = spawn(cfg, argv)
+  if err then
+    vim.notify("kori.nvim: " .. err, vim.log.levels.ERROR)
+    return false
   end
+  return true
+end
 
-  runtime.pane = { win = win, buf = buf }
-  vim.cmd("startinsert")
+function M.toggle(cmd)
+  if M.is_open() then
+    M.hide()
+    return false
+  end
+  M.start(cmd)
+  return M.is_open()
 end
 
 function M._runtime()

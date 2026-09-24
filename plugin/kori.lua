@@ -23,9 +23,14 @@ vim.api.nvim_create_user_command("KoriClear", function()
   kori.clear()
 end, { desc = "kori: forget every recorded edit" })
 
+vim.api.nvim_create_user_command("KoriToggle", function()
+  kori.toggle()
+end, { desc = "kori: toggle the chat pane" })
+
 vim.api.nvim_create_user_command("KoriStart", function(args)
-  kori.start(vim.split(args.args, "%s+", { trim = true }))
-end, { nargs = "*", desc = "kori: open kori in a right-hand split" })
+  local argv = vim.split(args.args, "%s+", { trim = true })
+  kori.start(#argv > 0 and argv or nil)
+end, { nargs = "*", desc = "kori: open the chat pane, optionally with another command" })
 
 vim.api.nvim_create_user_command("KoriPeek", function()
   local path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p")
