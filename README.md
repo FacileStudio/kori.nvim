@@ -70,7 +70,7 @@ Check it with `:checkhealth kori` if nothing happens.
 
 `:KoriSend` and `:KoriAsk` need an attached kori session over the IDE socket, which no kori release ships yet. They warn instead of silently doing nothing. Reverting does not: it works on the payload kori's hook already delivers.
 
-The pane opens to the right in its own buffer, so it never takes over the file you are editing, and it works from the dashboard. Toggling it off hides the window but leaves kori running, so toggling back returns to the same session. After kori exits, `:KoriStart` starts a fresh one.
+The pane opens to the right in its own buffer, so it never takes over the file you are editing, and it works from the dashboard. A followed edit opens beside it rather than over it, so the chat stays on screen while kori works. Toggling it off hides the window but leaves kori running, so toggling back returns to the same session. After kori exits, `:KoriStart` starts a fresh one.
 
 Statusline:
 
@@ -100,7 +100,9 @@ require("kori").setup({
 
 - `"off"` (default): a notification and marks. Nothing moves.
 - `"peek"`: a float opens beside your cursor with the changed lines, does not take focus, closes after four seconds.
-- `"open"`: the cursor lands on the first changed line. A file already on screen is reached by moving the cursor there; anything else opens in its own tab, never as a split, so your layout is left alone. Skipped when you are not in normal mode, or when the file kori edited has unsaved changes in a buffer, so it can never interrupt typing.
+- `"open"`: the cursor lands on the first changed line. A file already on screen is reached by moving the cursor there. Anything else opens in a window left of the chat pane when one is open, so the chat stays on screen, and in its own tab when the pane is closed.
+
+Follow never takes the cursor out of a window you are typing in, and chatting with kori counts: while the cursor is in the pane your keystrokes are going there. The file still opens beside the pane, you just keep the cursor. With no pane to put it beside there is nowhere to show the file without interrupting you, so the follow is skipped until you are back in normal mode. A file kori edited that has unsaved changes in a buffer is never followed either.
 
 Set `vim.g.kori_nvim_no_defaults = true` before the plugin loads to skip the automatic `setup()` and configure it yourself.
 
@@ -140,10 +142,10 @@ Next: the IDE socket in kori (`~/.kori/ide/<pid>.json` plus a unix socket, spoke
 make test
 ```
 
-Runs every file in `tests/`, 304 checks in total:
+Runs every file in `tests/`, 332 checks in total:
 
 - `run.lua` — the diff-to-line-ranges logic, the reload and stale-buffer guards, and the shim end to end
-- `follow.lua` — every `follow = "open"` outcome, and that none of them splits the view
+- `follow.lua` — every `follow = "open"` outcome: beside the pane, in its own tab, and the refusals
 - `cmdedit.lua` — the port of kori's in-place command parser, including what it refuses
 - `revert.lua` — `:KoriRevert` and its safety floor
 - `notify.lua` — the per-file notification coalescing

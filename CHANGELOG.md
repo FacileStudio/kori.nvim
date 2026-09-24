@@ -6,6 +6,25 @@ All notable changes to kori.nvim. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `follow = "open"` opens the edited file in a window left of the chat pane when
+  one is open, instead of a tab of its own, so the chat stays on screen while
+  kori works. With the pane closed the file still opens in its own tab.
+
+### Fixed
+
+- `follow = "open"` no longer does nothing while you are typing in the chat pane.
+  A terminal in insert mode is a mode like any other, and the old guard refused
+  every follow there, which meant a follow never happened from the dashboard: the
+  pane is the only window, so it is where the cursor is. The file now opens
+  beside the pane and the cursor stays where you are typing. A follow is skipped
+  only when there is no window it could appear in without interrupting you.
+- The file a follow shows now carries its marks immediately, instead of relying
+  on the buffer read a `tabedit` used to trigger.
+- A followed file no longer stacks a new column per edit: the window the last
+  follow opened is reused when it still shows what was put there.
+
 ## [0.1.0] - 2026-09-24
 
 First release.

@@ -90,6 +90,25 @@ function M.pane()
   return pane_windows()[1]
 end
 
+--- The window holding the pane in any tab, nil when it is hidden.
+---
+--- `pane_windows` only looks at the current tab, which is what "is it open"
+--- means. Opening a file beside the pane needs it across tabs, so that a follow
+--- lands next to the chat rather than in a tab of its own.
+--- @return integer|nil win
+function M.window()
+  local pane = state.pane
+  if not pane or not vim.api.nvim_buf_is_valid(pane.buf) then
+    return nil
+  end
+  for _, win in ipairs(vim.fn.win_findbuf(pane.buf)) do
+    if vim.api.nvim_win_is_valid(win) then
+      return win
+    end
+  end
+  return nil
+end
+
 --- Whether the pane is currently on screen.
 --- @return boolean
 function M.is_open()

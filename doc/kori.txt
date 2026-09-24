@@ -182,12 +182,17 @@ the plugin with |:checkhealth| kori.
                         focus taken, closes after four seconds
                 "open"  put the cursor on the first changed line. A file
                         already on screen is reached by moving the cursor
-                        there; any other file opens in its own tab, never as a
-                        split
+                        there; any other file opens in a window left of the
+                        chat pane when one is open, and in its own tab when
+                        there is no pane
 
-              "open" is skipped when you are not in normal mode, or when the
-              file kori edited has unsaved changes in a buffer, so it cannot
-              interrupt typing or show you a stale buffer.
+              "open" never takes the cursor out of a window you are typing in,
+              and chatting with kori counts: a file still opens beside the pane
+              while you type in it, you just keep the cursor. With no pane to
+              put it beside, there is nowhere to show the file without
+              interrupting you, so the follow is skipped until you are back in
+              normal mode. A file kori edited that has unsaved changes in a
+              buffer is never followed either.
 
 `keymaps`     Install the mappings above. Never overrides an existing mapping.
 
